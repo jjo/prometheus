@@ -174,6 +174,9 @@ func rangeQueryCases() []benchCase {
 		{
 			expr: "sample_random(0.5, a_X)",
 		},
+		{
+			expr: "sample_random(-0.5, a_X)",
+		},
 		// Combinations.
 		{
 			expr: "rate(a_X[1m]) + rate(b_X[1m])",
