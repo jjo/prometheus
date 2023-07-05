@@ -169,13 +169,13 @@ func rangeQueryCases() []benchCase {
 			expr: "sample_limit(5, a_X)",
 		},
 		{
-			expr: "sample_random(0.1, a_X)",
+			expr: "sample_ratio(0.1, a_X)",
 		},
 		{
-			expr: "sample_random(0.5, a_X)",
+			expr: "sample_ratio(0.5, a_X)",
 		},
 		{
-			expr: "sample_random(-0.5, a_X)",
+			expr: "sample_ratio(-0.5, a_X)",
 		},
 		// Combinations.
 		{
