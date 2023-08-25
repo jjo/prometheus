@@ -2816,7 +2816,11 @@ func (ev *evaluator) aggregation(op parser.ItemType, grouping []string, without 
 			}
 
 		case parser.SAMPLE_RATIO:
-			// We push elements to the heap, with `q` as ratio of samples.
+			// We push elements to the heap:
+			// - if  0.0 <= q <= 1.0: q is the sampling ratio
+			// - if -1.0 <= q <  0.0: 1-q is the sampling ratio (complementary set of samples than above)
+			//
+			// See AddRatioSample() implementation for detailed comments.
 			ratiosampler.AddRatioSample(q, s.T, &group.heap, &Sample{
 				F:      s.F,
 				Metric: s.Metric,
