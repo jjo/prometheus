@@ -66,6 +66,8 @@ func setupRangeQueryTestData(stor *teststorage.TestStorage, _ *Engine, interval,
 			return err
 		}
 	}
+	stor.DB.ForceHeadMMap() // Ensure we have at most one head chunk for every series.
+	stor.DB.Compact()
 	return nil
 }
 
@@ -160,6 +162,21 @@ func rangeQueryCases() []benchCase {
 		{
 			expr: "topk(5, a_X)",
 		},
+		{
+			expr: "sample_limit(1, a_X)",
+		},
+		{
+			expr: "sample_limit(5, a_X)",
+		},
+		{
+			expr: "sample_ratio(0.1, a_X)",
+		},
+		{
+			expr: "sample_ratio(0.5, a_X)",
+		},
+		{
+			expr: "sample_ratio(-0.5, a_X)",
+		},
 		// Combinations.
 		{
 			expr: "rate(a_X[1m]) + rate(b_X[1m])",
@@ -222,6 +239,7 @@ func rangeQueryCases() []benchCase {
 
 func BenchmarkRangeQuery(b *testing.B) {
 	stor := teststorage.New(b)
+	stor.DB.DisableCompactions() // Don't want auto-compaction disrupting timings.
 	defer stor.Close()
 	opts := EngineOpts{
 		Logger:     nil,
