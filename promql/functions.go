@@ -740,9 +740,14 @@ func funcSumOverTime(vals []parser.Value, args parser.Expressions, enh *EvalNode
 func funcIntegral(vals []parser.Value, args parser.Expressions, enh *EvalNodeHelper) (Vector, annotations.Annotations) {
 	var annos annotations.Annotations
 
+	constant := 0.0
 	strategy := 2
-	if len(args) >= 2 {
-		strategy = int(vals[1].(Vector)[0].F)
+	switch len(args) {
+	case 2:
+		constant = float64(vals[1].(Vector)[0].F)
+	case 3:
+		constant = float64(vals[1].(Vector)[0].F)
+		strategy = int(vals[2].(Vector)[0].F)
 	}
 	if strategy < 0 || strategy > 2 {
 		annos.Add(annotations.NewInvalidIntegralStrategyWarning(strategy, args[1].PositionRange()))
@@ -848,8 +853,11 @@ func funcIntegral(vals []parser.Value, args parser.Expressions, enh *EvalNodeHel
 				}
 			}
 			// Skip the first sample, aggregate non-zero values.
-			if i > 0 && (value != 0 || cValue != 0) {
+			if i > 0 && (value != 0 || cValue != 0 || constant != 0) {
 				deltaT := float64(f.T-prev.T) / 1000
+				if constant != 0 {
+					sum, c = kahanSumInc(constant*deltaT, sum, c)
+				}
 				sum, c = kahanSumInc(value*deltaT, sum, c+cValue*deltaT)
 			}
 			prev = f
