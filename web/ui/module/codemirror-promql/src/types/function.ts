@@ -78,6 +78,7 @@ import {
   Rad,
   Range,
   Rate,
+  RegressionOverTime,
   Resets,
   Round,
   Scalar,
@@ -515,6 +516,12 @@ const promqlFunctions: { [key: number]: PromQLFunction } = {
     name: 'rate',
     argTypes: [ValueType.matrix],
     variadic: 0,
+    returnType: ValueType.vector,
+  },
+  [RegressionOverTime]: {
+    name: 'regression_over_time',
+    argTypes: [ValueType.matrix, ValueType.matrix, ValueType.scalar],
+    variadic: 2,
     returnType: ValueType.vector,
   },
   [Resets]: {
