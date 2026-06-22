@@ -59,6 +59,7 @@ import {
   LabelJoin,
   LabelReplace,
   LastOverTime,
+  LmOverTime,
   Ln,
   Log10,
   Log2,
@@ -402,6 +403,12 @@ const promqlFunctions: { [key: number]: PromQLFunction } = {
     name: 'last_over_time',
     argTypes: [ValueType.matrix],
     variadic: 0,
+    returnType: ValueType.vector,
+  },
+  [LmOverTime]: {
+    name: 'lm_over_time',
+    argTypes: [ValueType.string, ValueType.matrix, ValueType.matrix, ValueType.string, ValueType.scalar],
+    variadic: 1,
     returnType: ValueType.vector,
   },
   [Ln]: {
