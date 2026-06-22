@@ -736,6 +736,58 @@ This second example has the same effect than the first example, and illustrates 
 label_replace(up{job="api-server",service="a:c"}, "foo", "$name", "service", "(?P<name>.*):(?P<version>.*)")
 ```
 
+## `lm_over_time()`
+
+**This function has to be enabled via the [feature
+flag](../feature_flags.md#experimental-promql-functions)
+`--enable-feature=promql-experimental-functions`.**
+
+`lm_over_time(method string, y range-vector, X range-vector, labelName string, lambda=0 scalar)`
+fits a multiple linear regression of the response series `y` on the predictor
+series `X` at each evaluation step, and returns the fitted coefficients. It is
+the multivariate generalization of
+[`regression_over_time()`](#regression_over_time): `labelName` is the pivot that
+reshapes `X` into a design matrix whose columns are the distinct values of that
+label.
+
+`method` selects the estimator:
+
+| `method`  | meaning                                                              |
+|-----------|----------------------------------------------------------------------|
+| `"lm"`    | ordinary least squares                                               |
+| `"ridge"` | L2-penalized least squares; requires `lambda > 0` (intercept unpenalized) |
+
+Predictor series are grouped by all labels except `__name__` and `labelName`;
+each group is one independent regression, and its distinct `labelName` values
+become the design-matrix columns. The response series is matched to a group by
+those same grouping labels. Each emitted series carries the group's labels with
+`labelName` set to the predictor's value — or to the reserved value
+`(intercept)` for the intercept term — and its value is the fitted coefficient.
+
+When `labelName` is empty, the function degenerates to the bivariate case and
+returns the regression slope per matched pair, matching `regression_over_time`
+with its default (slope) output.
+
+The fit is solved with a Householder QR decomposition, which is numerically
+stable for the near-collinear predictors common in metrics (for example CPU
+modes). A step returns `NaN` coefficients when the design is rank deficient —
+collinear predictors, or fewer samples than columns — and a PromQL info
+annotation is emitted. Groups whose predictor cardinality exceeds the supported
+maximum, or that contain a predictor whose pivot value collides with
+`(intercept)`, are skipped with a warning. Histogram samples are ignored.
+
+For example, to estimate how much each non-idle CPU mode contributes to request
+latency over the past hour:
+
+```
+lm_over_time(
+  "lm",
+  request_latency_p99[1h:1m],
+  rate(node_cpu_seconds_total{mode!="idle"}[1m])[1h:1m],
+  "mode"
+)
+```
+
 ## `max_of()`
 
 **This function has to be enabled via the [feature

@@ -287,6 +287,13 @@ var Functions = map[string]*Function{
 		ArgTypes:   []ValueType{ValueTypeMatrix},
 		ReturnType: ValueTypeVector,
 	},
+	"lm_over_time": {
+		Name:         "lm_over_time",
+		ArgTypes:     []ValueType{ValueTypeString, ValueTypeMatrix, ValueTypeMatrix, ValueTypeString, ValueTypeScalar},
+		Variadic:     1,
+		ReturnType:   ValueTypeVector,
+		Experimental: true,
+	},
 	"min_of": {
 		Name:         "min_of",
 		ArgTypes:     []ValueType{ValueTypeScalar, ValueTypeScalar},

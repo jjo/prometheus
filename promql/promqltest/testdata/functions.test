@@ -2533,3 +2533,67 @@ eval range from 2m to 9m step 1m regression_over_time(reg_range_y{job="test"}[5m
   {job="test"} 0.2 0.2 0.2 0.2 0.2 0.2 0.2 0.2
 
 clear
+
+# Tests for lm_over_time (multiple linear regression with a pivot label).
+clear
+
+# Exact fit: y = 1 + 2*x_a + 3*x_b. Predictors pivot on label "p".
+# Expect coefficient per predictor value plus the reserved (intercept).
+load 1m
+  lm_y{job="test"}          6 5 13 12 20
+  lm_x{job="test", p="a"}   1 2  3  4  5
+  lm_x{job="test", p="b"}   1 0  2  1  3
+
+eval instant at 5m lm_over_time("lm", lm_y{job="test"}[5m], lm_x{job="test"}[5m], "p")
+  {job="test", p="a"} 2
+  {job="test", p="b"} 3
+  {job="test", p="(intercept)"} 1
+
+clear
+
+# No pivot label: degenerates to the bivariate slope (regression_over_time).
+load 1m
+  lm_uni_y{job="test"} 2 4 6 8 10
+  lm_uni_x{job="test"} 10 20 30 40 50
+
+eval instant at 5m lm_over_time("lm", lm_uni_y{job="test"}[5m], lm_uni_x{job="test"}[5m], "")
+  {job="test"} 0.2
+
+clear
+
+# Collinear predictors (x_b = 2*x_a) make the design rank deficient => NaN
+# coefficients plus an info annotation.
+load 1m
+  lmc_y{job="test"}         1 2 3 4 5
+  lmc_x{job="test", p="a"}  1 2 3 4 5
+  lmc_x{job="test", p="b"}  2 4 6 8 10
+
+eval instant at 5m lm_over_time("lm", lmc_y{job="test"}[5m], lmc_x{job="test"}[5m], "p")
+  expect info
+  {job="test", p="a"} NaN
+  {job="test", p="b"} NaN
+  {job="test", p="(intercept)"} NaN
+
+clear
+
+# Invalid method => empty result plus a warning annotation.
+load 1m
+  lmm_y{job="test"}        1 2 3 4 5
+  lmm_x{job="test", p="a"} 1 2 3 4 5
+
+eval instant at 5m lm_over_time("lme4", lmm_y{job="test"}[5m], lmm_x{job="test"}[5m], "p")
+  expect warn
+
+clear
+
+# A predictor whose pivot value collides with the reserved "(intercept)"
+# string skips the whole group with a warning.
+load 1m
+  lmr_y{job="test"}                  1 2 3 4 5
+  lmr_x{job="test", p="a"}           1 2 3 4 5
+  lmr_x{job="test", p="(intercept)"} 1 0 2 1 3
+
+eval instant at 5m lm_over_time("lm", lmr_y{job="test"}[5m], lmr_x{job="test"}[5m], "p")
+  expect warn
+
+clear

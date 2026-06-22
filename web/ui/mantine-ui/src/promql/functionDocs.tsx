@@ -2157,6 +2157,48 @@ const funcDocs: Record<string, React.ReactNode> = {
       </p>
     </>
   ),
+  lm_over_time: (
+    <>
+      <p>
+        <strong>
+          This function has to be enabled via the{" "}
+          <a href="../feature_flags.md#experimental-promql-functions">feature flag</a>
+          <code>--enable-feature=promql-experimental-functions</code>.
+        </strong>
+      </p>
+
+      <p>
+        <code>lm_over_time(method, y range-vector, X range-vector, labelName, lambda=0)</code>
+        fits a multiple linear regression of the response series <code>y</code> on the predictor series <code>X</code>{" "}
+        at each step and returns the fitted coefficients. It is the multivariate generalization of{" "}
+        <code>regression_over_time</code>: <code>labelName</code> is the pivot that reshapes <code>X</code> into a design
+        matrix whose columns are the distinct values of that label.
+      </p>
+
+      <p>
+        <code>method</code> is <code>"lm"</code> (ordinary least squares) or <code>"ridge"</code> (L2-penalized,
+        requiring <code>lambda &gt; 0</code>, intercept unpenalized). Predictor series are grouped by all labels except{" "}
+        <code>__name__</code> and <code>labelName</code>; each group is one regression, and its distinct{" "}
+        <code>labelName</code> values become the columns. Each emitted series carries the group labels with{" "}
+        <code>labelName</code> set to the predictor value, or to the reserved value <code>(intercept)</code> for the
+        intercept, and its value is the fitted coefficient.
+      </p>
+
+      <p>
+        When <code>labelName</code> is empty the function degenerates to the bivariate slope, matching{" "}
+        <code>regression_over_time</code>. The fit uses a Householder QR decomposition, which is stable for the
+        near-collinear predictors common in metrics. A step returns <code>NaN</code> coefficients (plus an info
+        annotation) when the design is rank deficient.
+      </p>
+
+      <pre>
+        <code>
+          lm_over_time("lm", request_latency_p99[1h:1m], rate(node_cpu_seconds_total{"{"}mode!="idle"{"}"}[1m])[1h:1m],
+          "mode")
+        </code>
+      </pre>
+    </>
+  ),
   ln: (
     <>
       <p>
