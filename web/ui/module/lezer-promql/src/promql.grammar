@@ -227,6 +227,7 @@ FunctionIdentifier {
   SumOverTime |
   Tan |
   Tanh |
+  TimeToThreshold |
   Timestamp |
   Time |
   Vector |
@@ -525,6 +526,7 @@ durationPrimary[@inline] {
   Tan { condFn<"tan"> }
   Tanh { condFn<"tanh">}
   Time { condFn<"time"> }
+  TimeToThreshold { condFn<"time_to_threshold"> }
   Timestamp { condFn<"timestamp"> }
   Vector { condFn<"vector"> }
   Year { condFn<"year"> }
