@@ -178,6 +178,24 @@ port: 9300`,
 				require.Equal(t, 9300, cfg.LightsailSDConfig.Port)
 			},
 		},
+		{
+			name: "RDSWithFlatFields",
+			yaml: `role: rds
+region: us-east-1
+port: 9400
+filters:
+  - name: engine
+    values: [aurora-postgresql]`,
+			validateFunc: func(t *testing.T, cfg *SDConfig) {
+				require.Equal(t, RoleRDS, cfg.Role)
+				require.NotNil(t, cfg.RDSSDConfig)
+				require.Equal(t, "us-east-1", cfg.RDSSDConfig.Region)
+				require.Equal(t, 9400, cfg.RDSSDConfig.Port)
+				require.Len(t, cfg.RDSSDConfig.Filters, 1)
+				require.Equal(t, "engine", cfg.RDSSDConfig.Filters[0].Name)
+				require.Equal(t, []string{"aurora-postgresql"}, cfg.RDSSDConfig.Filters[0].Values)
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -492,6 +510,37 @@ region = ` + randomRegion + `
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "failed to get region from IMDS")
 	})
+}
+
+// Regression test for issue #6092: parsing an AWS SD config must not call
+// IMDS even when the region is omitted.
+func TestAWSSDConfigUnmarshalYAML_NoRegionResolution(t *testing.T) {
+	// Point IMDS at a black hole and wipe every other region source so any
+	// accidental loadRegion call fails fast instead of waiting on IMDS.
+	t.Setenv("AWS_EC2_METADATA_SERVICE_ENDPOINT", "http://127.0.0.1:1")
+	t.Setenv("AWS_REGION", "")
+	t.Setenv("AWS_DEFAULT_REGION", "")
+	t.Setenv("AWS_CONFIG_FILE", "")
+	t.Setenv("AWS_PROFILE", "")
+
+	yamls := map[string]string{
+		"ec2":         `region: ""`,
+		"ecs":         `region: ""`,
+		"rds":         `region: ""`,
+		"msk":         `region: ""`,
+		"elasticache": `region: ""`,
+		"lightsail":   `region: ""`,
+	}
+
+	for role, body := range yamls {
+		t.Run(role, func(t *testing.T) {
+			yamlStr := "role: " + role + "\n" + body + "\n"
+			cfg := SDConfig{}
+			err := yaml.Unmarshal([]byte(yamlStr), &cfg)
+			require.NoError(t, err, "config parsing must not make network calls")
+			require.Empty(t, cfg.Region, "region must remain empty after parse; resolution is deferred to SD init")
+		})
+	}
 }
 
 func TestSDConfigSetDirectory(t *testing.T) {

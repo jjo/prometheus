@@ -14,6 +14,23 @@
 import { Completion, snippet } from '@codemirror/autocomplete';
 
 export const durationTerms = [{ label: 'y' }, { label: 'w' }, { label: 'd' }, { label: 'h' }, { label: 'm' }, { label: 's' }, { label: 'ms' }];
+export const durationExprTerms: Completion[] = [
+  { label: 'step()', info: 'Resolves to the current query step duration', type: 'keyword' },
+  { label: 'range()', info: 'Resolves to the total query range duration', type: 'keyword' },
+  {
+    label: 'min_of(, )',
+    info: 'Returns the minimum of two durations',
+    type: 'keyword',
+    apply: snippet('min_of(${duration_a}, ${duration_b})'),
+  },
+  {
+    label: 'max_of(, )',
+    info: 'Returns the maximum of two durations',
+    type: 'keyword',
+    apply: snippet('max_of(${duration_a}, ${duration_b})'),
+  },
+];
+export const durationExprOperatorTerms = [{ label: '^' }, { label: '*' }, { label: '/' }, { label: '%' }, { label: '+' }, { label: '-' }];
 export const matchOpTerms = [{ label: '=' }, { label: '!=' }, { label: '=~' }, { label: '!~' }];
 export const binOpTerms = [
   { label: '^' },
@@ -524,6 +541,12 @@ export const functionIdentifierTerms = [
     type: 'function',
   },
   {
+    label: 'start_timestamp',
+    detail: 'function',
+    info: 'Return the start timestamp for the samples in the input vector',
+    type: 'function',
+  },
+  {
     label: 'step',
     detail: 'function',
     info: 'Return the query step in seconds',
@@ -581,6 +604,30 @@ export const functionIdentifierTerms = [
     label: 'year',
     detail: 'function',
     info: 'Return the year for provided timestamps',
+    type: 'function',
+  },
+  {
+    label: 'zscore',
+    detail: 'function',
+    info: 'Return the z-score of each sample relative to the mean and stddev across the instant vector',
+    type: 'function',
+  },
+  {
+    label: 'zscore_over_time',
+    detail: 'function',
+    info: 'Return the z-score of the most recent sample relative to the range window mean and stddev',
+    type: 'function',
+  },
+  {
+    label: 'robust_zscore',
+    detail: 'function',
+    info: 'Return the robust z-score of each sample relative to the median and MAD across the instant vector',
+    type: 'function',
+  },
+  {
+    label: 'robust_zscore_over_time',
+    detail: 'function',
+    info: 'Return the robust z-score of the most recent sample relative to the range window median and MAD',
     type: 'function',
   },
 ];

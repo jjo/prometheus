@@ -820,6 +820,57 @@ reset. A counter histogram sample followed by a gauge histogram sample, or vice
 versa, also counts as a reset (but note that `resets` should not be used on
 gauges in the first place, see above).
 
+## `robust_zscore()`
+
+**This function has to be enabled via the [feature
+flag](../feature_flags.md#experimental-promql-functions)
+`--enable-feature=promql-experimental-functions`.**
+
+`robust_zscore(v instant-vector)` returns the *robust* z-score (also known in
+the literature as the *modified z-score*) of each float sample in the instant
+vector relative to the median and median absolute deviation (MAD) of the
+float samples across the vector at the same evaluation timestamp:
+
+```
+(v - median(v)) / (1.4826 * MAD(v))
+```
+
+where `MAD(v) = median(|v - median(v)|)`. The `1.4826` factor makes MAD a
+consistent estimator of the standard deviation under a normal distribution
+(see [Rousseeuw & Croux,
+1993](https://doi.org/10.1080/01621459.1993.10476408) and [Leys et al.,
+2013](https://doi.org/10.1016/j.jesp.2013.03.013)).
+
+Compared to `zscore`, this estimator tolerates a few extreme outliers in the
+cohort without being pulled by them, which makes it well-suited for fleet-
+level anomaly detection. Returns `NaN` for every sample when MAD is `0`
+(constant vector, single sample, or a vector where a majority of values are
+equal — a known robustness/limit tradeoff of MAD). Native histogram samples
+are skipped; if any are present alongside floats, an info-level annotation
+is emitted.
+
+## `robust_zscore_over_time()`
+
+**This function has to be enabled via the [feature
+flag](../feature_flags.md#experimental-promql-functions)
+`--enable-feature=promql-experimental-functions`.**
+
+`robust_zscore_over_time(v range-vector)` returns the *robust* z-score (also
+known in the literature as the *modified z-score*) of the most recent sample
+in the range relative to the median and median absolute deviation (MAD) of
+all float samples in the range:
+
+```
+(last - median) / (1.4826 * MAD)
+```
+
+The constant and rationale are the same as for [`robust_zscore()`](#robust_zscore).
+This function is the outlier-resistant counterpart of
+[`zscore_over_time()`](#zscore_over_time): a single extreme value in the
+window does not skew the baseline. Returns `NaN` when MAD is `0`. Native
+histogram samples are skipped; if any are present alongside floats, an
+info-level annotation is emitted.
+
 ## `round()`
 
 `round(v instant-vector, to_nearest=1 scalar)` rounds the sample values of all
@@ -894,6 +945,14 @@ flag](../feature_flags.md#experimental-promql-functions)
 number of seconds since January 1, 1970 UTC. For instant queries, this is equal
 to the evaluation timestamp.
 
+## `start_timestamp()`
+
+`start_timestamp(v instant-vector)` returns the start timestamp of each of the samples of
+the given vector as the number of seconds since January 1, 1970 UTC. It acts on
+float and histogram samples in the same way.
+
+This function only works when used directly on an instant vector and when `use-start-timestamps` feature flag is enabled. Otherwise, if it's used on an expression or if `use-start-timestamps` is disabled, it returns empty results.
+
 ## `step()`
 
 **This function has to be enabled via the [feature
@@ -925,6 +984,62 @@ a single-element instant vector with no labels.
 `year(v=vector(time()) instant-vector)` returns the year for each of the given
 times in UTC. Histogram samples in the input vector are ignored silently.
 
+## `zscore()`
+
+**This function has to be enabled via the [feature
+flag](../feature_flags.md#experimental-promql-functions)
+`--enable-feature=promql-experimental-functions`.**
+
+`zscore(v instant-vector)` returns the z-score of each float sample in the
+instant vector relative to the mean and standard deviation of the float
+samples across the vector at the same evaluation timestamp:
+
+```
+(v - avg(v)) / stddev(v)
+```
+
+This is useful for cross-series anomaly detection at a single instant: values
+near `0` mean the series is close to the cohort's typical value, while
+magnitudes greater than roughly `2`-`3` indicate series that deviate from
+their peers. Returns `NaN` for every sample when the standard deviation is
+`0` (constant vector or single sample). Native histogram samples are skipped;
+if any are present alongside floats, an info-level annotation is emitted.
+
+For example, to flag instances whose current request latency deviates by more
+than three standard deviations from the rest of the fleet:
+
+```
+abs(zscore(http_request_duration_seconds)) > 3
+```
+
+## `zscore_over_time()`
+
+**This function has to be enabled via the [feature
+flag](../feature_flags.md#experimental-promql-functions)
+`--enable-feature=promql-experimental-functions`.**
+
+`zscore_over_time(v range-vector)` returns the z-score of the most recent
+sample in the range relative to the mean and standard deviation of all float
+samples in the range:
+
+```
+(ts - avg_over_time(ts[range])) / stddev_over_time(ts[range])
+```
+
+This is useful for anomaly detection: values near `0` mean the latest sample is
+close to the recent window's typical value, while magnitudes greater than
+roughly `2`-`3` indicate the latest sample is an outlier compared to the
+window. Returns `NaN` when the standard deviation is `0` (constant series or
+single sample). Native histogram samples are ignored silently, as with
+`stddev_over_time`.
+
+For example, to flag request latency that is more than three standard
+deviations away from its own behaviour over the past hour:
+
+```
+abs(zscore_over_time(http_request_duration_seconds[1h])) > 3
+```
+
 ## `<aggregation>_over_time()`
 
 The following functions allow aggregating each series of a given range vector
@@ -939,6 +1054,7 @@ over time and return an instant vector with per-series aggregation results:
 * `stddev_over_time(range-vector)`: the population standard deviation of all float samples in the specified interval.
 * `stdvar_over_time(range-vector)`: the population variance of all float samples in the specified interval.
 * `last_over_time(range-vector)`: the most recent sample in the specified interval.
+* `first_over_time(range-vector)`: the oldest sample in the specified interval.
 * `present_over_time(range-vector)`: the value 1 for any series in the specified interval.
 
 If the [feature flag](../feature_flags.md#experimental-promql-functions)
@@ -953,7 +1069,6 @@ additional functions are available:
   that has the maximum value of all float samples in the specified interval.
 * `ts_of_last_over_time(range-vector)`: the timestamp of last sample in the
   specified interval.
-* `first_over_time(range-vector)`: the oldest sample in the specified interval.
 * `ts_of_first_over_time(range-vector)`: the timestamp of earliest sample in the
   specified interval.
 
@@ -979,8 +1094,7 @@ These functions act on histograms in the following way:
 select the first sample of `m` _within_ the 1m range, where `m offset 1m` will
 select the most recent sample within the lookback interval _outside and prior
 to_ the 1m offset. This is particularly useful with `first_over_time(m[step()])`
-in range queries (available when `--enable-feature=promql-duration-expr` is set)
-to ensure that the sample selected is within the range step.
+in range queries to ensure that the sample selected is within the range step.
 
 ## Trigonometric Functions
 

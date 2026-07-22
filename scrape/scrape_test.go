@@ -391,7 +391,7 @@ func testDroppedTargetsList(t *testing.T, appV2 bool) {
 		}
 		sa                     = selectAppendable(app, appV2)
 		sp, _                  = newScrapePool(cfg, sa.V1(), sa.V2(), 0, nil, nil, &Options{}, newTestScrapeMetrics(t))
-		expectedLabelSetString = "{__address__=\"127.0.0.1:9090\", __scrape_interval__=\"0s\", __scrape_timeout__=\"0s\", job=\"dropMe\"}"
+		expectedLabelSetString = "{__address__=\"127.0.0.1:9090\", __always_scrape_classic_histograms__=\"false\", __convert_classic_histograms_to_nhcb__=\"false\", __scrape_interval__=\"0s\", __scrape_native_histograms__=\"false\", __scrape_timeout__=\"0s\", job=\"dropMe\"}"
 		expectedLength         = 2
 	)
 	sp.Sync(tgs)
@@ -1127,7 +1127,7 @@ func testScrapeLoopStop(t *testing.T, appV2 bool) {
 		case i%6 == 0:
 			ts = s.T
 		case s.T != ts:
-			t.Fatalf("Unexpected multiple timestamps within single scrape")
+			t.Fatal("Unexpected multiple timestamps within single scrape")
 		}
 	}
 	// All samples from the last scrape must be stale markers.
@@ -1921,7 +1921,9 @@ func TestScrapeLoopAppend_StartTimeSynthesis_WithSTStorage(t *testing.T) {
 
 	s := teststorage.New(t, func(opt *tsdb.Options) {
 		opt.EnableSTStorage = true
-		opt.EnableXOR2Encoding = true
+		opt.XOR2EncodingAllowed = true
+		opt.FloatChunkEncoding = chunkenc.EncXOR2
+		opt.EnableHistogramSTEncoding = true
 	})
 
 	appTest := teststorage.NewAppendable().Then(s)
@@ -2628,7 +2630,7 @@ func testSetOptionsHandlingStaleness(t *testing.T, appV2 bool) {
 	select {
 	case <-signal:
 	case <-time.After(10 * time.Second):
-		t.Fatalf("Scrape wasn't stopped.")
+		t.Fatal("Scrape wasn't stopped.")
 	}
 
 	ctx1, cancel := context.WithCancel(t.Context())
@@ -5397,7 +5399,7 @@ func testScrapeReportLimit(t *testing.T, appV2 bool) {
 
 	select {
 	case <-time.After(5 * time.Second):
-		t.Fatalf("target was not scraped twice")
+		t.Fatal("target was not scraped twice")
 	case <-scrapedTwice:
 		// If the target has been scraped twice, report samples from the first
 		// scrape have been inserted in the database.
@@ -5457,7 +5459,7 @@ func testScrapeUTF8(t *testing.T, appV2 bool) {
 
 	select {
 	case <-time.After(5 * time.Second):
-		t.Fatalf("target was not scraped twice")
+		t.Fatal("target was not scraped twice")
 	case <-scrapedTwice:
 		// If the target has been scraped twice, report samples from the first
 		// scrape have been inserted in the database.
@@ -5618,6 +5620,53 @@ func testTargetScrapeIntervalAndTimeoutRelabel(t *testing.T, appV2 bool) {
 	require.Equal(t, "750ms", sp.ActiveTargets()[0].labels.Get(model.ScrapeTimeoutLabel))
 }
 
+func TestTargetScrapeConvertClassicHistogramsToNHCBRelabel(t *testing.T) {
+	foreachAppendable(t, func(t *testing.T, appV2 bool) {
+		testTargetScrapeConvertClassicHistogramsToNHCBRelabel(t, appV2)
+	})
+}
+
+func testTargetScrapeConvertClassicHistogramsToNHCBRelabel(t *testing.T, appV2 bool) {
+	interval, _ := model.ParseDuration("2s")
+	timeout, _ := model.ParseDuration("500ms")
+	cfg := &config.ScrapeConfig{
+		ScrapeInterval:             interval,
+		ScrapeTimeout:              timeout,
+		MetricNameValidationScheme: model.UTF8Validation,
+		MetricNameEscapingScheme:   model.AllowUTF8,
+		RelabelConfigs: []*relabel.Config{
+			{
+				SourceLabels:         model.LabelNames{convertClassicHistogramsToNHCBLabel},
+				Regex:                relabel.MustNewRegexp("false"),
+				Replacement:          "true",
+				TargetLabel:          convertClassicHistogramsToNHCBLabel,
+				Action:               relabel.Replace,
+				NameValidationScheme: model.UTF8Validation,
+			},
+		},
+	}
+
+	sa := selectAppendable(teststorage.NewAppendable(), appV2)
+	sp, _ := newScrapePool(cfg, sa.V1(), sa.V2(), 0, nil, nil, &Options{}, newTestScrapeMetrics(t))
+	tgts := []*targetgroup.Group{
+		{
+			Targets: []model.LabelSet{{model.AddressLabel: "127.0.0.1:9090"}},
+		},
+	}
+
+	sp.Sync(tgts)
+	defer sp.stop()
+
+	require.Equal(t, "true", sp.ActiveTargets()[0].labels.Get(convertClassicHistogramsToNHCBLabel))
+
+	sp.targetMtx.Lock()
+	require.Len(t, sp.loops, 1)
+	for _, l := range sp.loops {
+		require.True(t, l.(*scrapeLoop).convertClassicHistToNHCB)
+	}
+	sp.targetMtx.Unlock()
+}
+
 // Testing whether we can remove trailing .0 from histogram 'le' and summary 'quantile' labels.
 func TestLeQuantileReLabel(t *testing.T) {
 	foreachAppendable(t, func(t *testing.T, appV2 bool) {
@@ -5711,7 +5760,7 @@ test_summary_count 199
 
 	select {
 	case <-time.After(5 * time.Second):
-		t.Fatalf("target was not scraped")
+		t.Fatal("target was not scraped")
 	case <-scrapedTwice:
 	}
 
@@ -6302,7 +6351,7 @@ disk_usage_bytes 456
 
 	select {
 	case <-time.After(5 * time.Second):
-		t.Fatalf("target was not scraped")
+		t.Fatal("target was not scraped")
 	case <-scrapedTwice:
 	}
 
@@ -6364,7 +6413,7 @@ func testScrapeLoopRunCreatesStaleMarkersOnFailedScrapeForTimestampedMetrics(t *
 	select {
 	case <-signal:
 	case <-time.After(5 * time.Second):
-		t.Fatalf("Scrape wasn't stopped.")
+		t.Fatal("Scrape wasn't stopped.")
 	}
 
 	got := appTest.ResultSamples()
@@ -6437,7 +6486,7 @@ func testScrapeLoopCompression(t *testing.T, appV2 bool) {
 
 			select {
 			case <-time.After(5 * time.Second):
-				t.Fatalf("target was not scraped")
+				t.Fatal("target was not scraped")
 			case <-scraped:
 			}
 		})
