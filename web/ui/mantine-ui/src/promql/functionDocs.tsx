@@ -1200,45 +1200,6 @@ const funcDocs: Record<string, React.ReactNode> = {
       </p>
     </>
   ),
-  ewma_over_time: (
-    <>
-      <p>
-        <strong>
-          This function has to be enabled via the{" "}
-          <a href="../feature_flags.md#experimental-promql-functions">feature flag</a>
-          <code>--enable-feature=promql-experimental-functions</code>.
-        </strong>
-      </p>
-
-      <p>
-        <code>ewma_over_time(v range-vector, alpha scalar)</code> returns the exponentially-weighted moving average of
-        the float samples in the range vector for a smoothing factor <code>alpha</code> in <code>(0, 1]</code>:
-      </p>
-
-      <pre>
-        <code>s[i] = alpha * x[i] + (1 - alpha) * s[i-1], with s[0] = x[0]</code>
-      </pre>
-
-      <p>
-        Higher <code>alpha</code> tracks the most recent samples more responsively; lower <code>alpha</code>
-        applies heavier smoothing of older history. Compared to <code>avg_over_time</code>, EWMA weights recent
-        observations more, so it can track gradual drifts while damping per-scrape noise.
-      </p>
-
-      <p>
-        Returns <code>NaN</code> per series for an out-of-range or <code>NaN</code> <code>alpha</code>, with a
-        warning-level annotation. Histogram samples are skipped. Ranges containing only histogram samples are silently
-        removed from the output, while ranges containing a mix of float and histogram samples use only the float samples
-        and emit an info-level annotation.
-      </p>
-
-      <p>For example, to alert on sustained request-latency drift while dampening per-scrape noise:</p>
-
-      <pre>
-        <code>ewma_over_time(http_request_duration_seconds[30m], 0.2) &gt; 0.5</code>
-      </pre>
-    </>
-  ),
   exp: (
     <>
       <p>
@@ -1975,37 +1936,6 @@ const funcDocs: Record<string, React.ReactNode> = {
       </p>
     </>
   ),
-  integral: (
-    <>
-      <p>
-        <strong>
-          This function has to be enabled via the{" "}
-          <a href="../feature_flags.md#experimental-promql-functions">feature flag</a>
-          <code>--enable-feature=promql-experimental-functions</code>.
-        </strong>
-      </p>
-
-      <p>
-        <code>integral(v range-vector, strategy=2 scalar)</code> calculates the integral of the time series over time in
-        seconds. The optional <code>strategy</code> controls which quadrature rule is used for each interval:{" "}
-        <code>0</code> for the left-point rectangle rule, <code>1</code> for the right-point rectangle rule, and{" "}
-        <code>2</code> for the trapezoidal rule using the average of the adjacent samples. The default is <code>2</code>
-        .
-      </p>
-
-      <p>
-        <code>integral</code> should only be used with gauges, most likely representing a rate in units per second.
-      </p>
-
-      <p>For example, to calculate the total nodes cost accumulated the last 7 days, given its hourly cost:</p>
-
-      <pre>
-        <code>
-          integral(hourly_cost{"{"}job=&quot;nodes&quot;{"}"}[7d]) / 3600
-        </code>
-      </pre>
-    </>
-  ),
   irate: (
     <>
       <p>
@@ -2238,33 +2168,82 @@ const funcDocs: Record<string, React.ReactNode> = {
       </p>
 
       <p>
-        <code>lm_over_time(method, y range-vector, X range-vector, labelName, lambda=0)</code>
+        <code>lm_over_time(method string, y range-vector, X range-vector, labelName string, lambda=0 scalar)</code>
         fits a multiple linear regression of the response series <code>y</code> on the predictor series <code>X</code>{" "}
-        at each step and returns the fitted coefficients. It is the multivariate generalization of{" "}
-        <code>regression_over_time</code>: <code>labelName</code> is the pivot that reshapes <code>X</code> into a design
-        matrix whose columns are the distinct values of that label.
+        at each evaluation step, and returns the fitted coefficients. It is the multivariate generalization of
+        <a href="#regression_over_time">
+          <code>regression_over_time()</code>
+        </a>
+        : <code>labelName</code> is the pivot that reshapes <code>X</code> into a design matrix whose columns are the
+        distinct values of that label.
       </p>
 
       <p>
-        <code>method</code> is <code>"lm"</code> (ordinary least squares) or <code>"ridge"</code> (L2-penalized,
-        requiring <code>lambda &gt; 0</code>, intercept unpenalized). Predictor series are grouped by all labels except{" "}
-        <code>__name__</code> and <code>labelName</code>; each group is one regression, and its distinct{" "}
-        <code>labelName</code> values become the columns. Each emitted series carries the group labels with{" "}
-        <code>labelName</code> set to the predictor value, or to the reserved value <code>(intercept)</code> for the
-        intercept, and its value is the fitted coefficient.
+        <code>method</code> selects the estimator:
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>
+              <code>method</code>
+            </th>
+            <th>meaning</th>
+          </tr>
+        </thead>
+
+        <tbody>
+          <tr>
+            <td>
+              <code>&quot;lm&quot;</code>
+            </td>
+            <td>ordinary least squares</td>
+          </tr>
+
+          <tr>
+            <td>
+              <code>&quot;ridge&quot;</code>
+            </td>
+            <td>
+              L2-penalized least squares; requires <code>lambda &gt; 0</code> (intercept unpenalized)
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <p>
+        Predictor series are grouped by all labels except <code>__name__</code> and <code>labelName</code>; each group
+        is one independent regression, and its distinct <code>labelName</code> values become the design-matrix columns.
+        The response series is matched to a group by those same grouping labels. Each emitted series carries the
+        group&rsquo;s labels with
+        <code>labelName</code> set to the predictor&rsquo;s value — or to the reserved value
+        <code>(intercept)</code> for the intercept term — and its value is the fitted coefficient. Each group also emits
+        a <code>(r2)</code> series carrying the coefficient of determination (the fraction of the response variance
+        explained), so a meaningful fit can be told apart from a spurious one that the coefficients alone would hide; it
+        is
+        <code>NaN</code> when the fit is undefined.
       </p>
 
       <p>
-        When <code>labelName</code> is empty the function degenerates to the bivariate slope, matching{" "}
-        <code>regression_over_time</code>. The fit uses a Householder QR decomposition, which is stable for the
-        near-collinear predictors common in metrics. A step returns <code>NaN</code> coefficients (plus an info
-        annotation) when the design is rank deficient.
+        When <code>labelName</code> is empty, the function degenerates to the bivariate case and returns the regression
+        slope per matched pair, matching <code>regression_over_time</code>
+        with its default (slope) output.
       </p>
+
+      <p>
+        The fit is solved with a Householder QR decomposition, which is numerically stable for the near-collinear
+        predictors common in metrics (for example CPU modes). A step returns <code>NaN</code> coefficients when the
+        design is rank deficient — collinear predictors, or fewer samples than columns — and a PromQL info annotation is
+        emitted. Groups whose predictor cardinality exceeds the supported maximum, or that contain a predictor whose
+        pivot value collides with
+        <code>(intercept)</code>, are skipped with a warning. Histogram samples are ignored.
+      </p>
+
+      <p>For example, to estimate how much each non-idle CPU mode contributes to request latency over the past hour:</p>
 
       <pre>
         <code>
-          lm_over_time("lm", request_latency_p99[1h:1m], rate(node_cpu_seconds_total{"{"}mode!="idle"{"}"}[1m])[1h:1m],
-          "mode")
+          lm_over_time( &quot;lm&quot;, request_latency_p99[1h:1m], rate(node_cpu_seconds_total{"{"}
+          mode!=&quot;idle&quot;{"}"}[1m])[1h:1m], &quot;mode&quot; )
         </code>
       </pre>
     </>
@@ -3138,9 +3117,17 @@ const funcDocs: Record<string, React.ReactNode> = {
       </p>
 
       <p>
-        This generalises <code>correlation_over_time</code>: where correlation returns the unitless association
-        coefficient <code>r</code>, regression returns the predictive line itself (<code>slope = r · σy/σx</code>) and,
-        optionally, a forecast. It is the closed-form, Gaussian-family special case of a count time-series GLM.
+        This generalises{" "}
+        <a href="#correlation_over_time">
+          <code>correlation_over_time()</code>
+        </a>
+        : where correlation returns the unitless association coefficient <code>r</code>, regression returns the
+        predictive line itself (<code>slope = r · σy/σx</code>) and, optionally, a forecast. It is the closed-form,
+        Gaussian-family special case of a count time-series GLM (see the{" "}
+        <a href="https://cran.r-project.org/package=tscount">
+          <code>tscount</code> package
+        </a>
+        ); the iterative maximum-likelihood fit of the full GLM is intentionally not implemented.
       </p>
 
       <p>
@@ -3162,44 +3149,87 @@ const funcDocs: Record<string, React.ReactNode> = {
             <td>
               <code>0</code>
             </td>
-            <td>slope β₁ (default)</td>
+            <td>
+              slope <code>β₁</code> (default)
+            </td>
           </tr>
 
           <tr>
             <td>
               <code>1</code>
             </td>
-            <td>intercept β₀</td>
+            <td>
+              intercept <code>β₀</code>
+            </td>
           </tr>
 
           <tr>
             <td>
               <code>2</code>
             </td>
-            <td>prediction ŷ at the most recent x in the window</td>
+            <td>
+              prediction <code>ŷ</code> at the most recent <code>x</code> in the window
+            </td>
           </tr>
 
           <tr>
             <td>
               <code>3</code>
             </td>
-            <td>coefficient of determination r²</td>
+            <td>
+              coefficient of determination <code>r²</code>
+            </td>
           </tr>
         </tbody>
       </table>
-
       <p>
-        The optional <code>link</code> scalar selects the link function: <code>0</code> (identity, default) fits{" "}
-        <code>y ≈ β₀ + β₁·x</code>; <code>1</code> (log) fits <code>ln(y) ≈ β₀ + β₁·x</code>, suiting non-negative
-        count-like series. Under the log link the prediction is back-transformed with <code>exp</code>, and samples with
-        non-positive <code>y</code> are dropped with a PromQL info annotation.
+        The optional <code>link</code> scalar selects the link function:
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>
+              <code>link</code>
+            </th>
+            <th>meaning</th>
+          </tr>
+        </thead>
+
+        <tbody>
+          <tr>
+            <td>
+              <code>0</code>
+            </td>
+            <td>
+              identity (default): fits <code>y ≈ β₀ + β₁·x</code>
+            </td>
+          </tr>
+
+          <tr>
+            <td>
+              <code>1</code>
+            </td>
+            <td>
+              log: fits <code>ln(y) ≈ β₀ + β₁·x</code>, i.e. <code>y ≈ exp(β₀)·exp(β₁·x)</code>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <p>
+        The log link suits non-negative, count-like series. Its slope, intercept and
+        <code>r²</code> are reported on the natural-log scale, while the prediction is back-transformed with{" "}
+        <code>exp</code>. Samples with non-positive <code>y</code> cannot be log-transformed and are dropped, with a
+        PromQL info annotation.
       </p>
 
       <p>
-        Returns <code>NaN</code> for a step when the paired window has fewer than 2 samples, when <code>x</code> has zero
-        variance, or when <code>output</code>/<code>link</code> is out of range — in the last case a PromQL warning
-        annotation is also emitted. Histogram samples are skipped and do not contribute.
+        Returns <code>NaN</code> for a step when the paired window has fewer than 2 samples, when
+        <code>x</code> has zero variance, or when <code>output</code>/<code>link</code> is out of range — in the last
+        case a PromQL warning annotation is also emitted. Histogram samples are skipped and do not contribute.
       </p>
+
+      <p>For example, to estimate how much CPU each unit of request rate costs, fitted over the past hour:</p>
 
       <pre>
         <code>
@@ -3227,78 +3257,6 @@ const funcDocs: Record<string, React.ReactNode> = {
         A float sample followed by a histogram sample, or vice versa, counts as a reset. A counter histogram sample
         followed by a gauge histogram sample, or vice versa, also counts as a reset (but note that <code>resets</code>{" "}
         should not be used on gauges in the first place, see above).
-      </p>
-    </>
-  ),
-  robust_zscore: (
-    <>
-      <p>
-        <strong>
-          This function has to be enabled via the{" "}
-          <a href="../feature_flags.md#experimental-promql-functions">feature flag</a>
-          <code>--enable-feature=promql-experimental-functions</code>.
-        </strong>
-      </p>
-
-      <p>
-        <code>robust_zscore(v instant-vector)</code> returns the <em>robust</em> z-score (also known in the literature
-        as the <em>modified z-score</em>) of each float sample in the instant vector relative to the median and median
-        absolute deviation (MAD) of the float samples across the vector at the same evaluation timestamp:
-      </p>
-
-      <pre>
-        <code>(v - median(v)) / (1.4826 * MAD(v))</code>
-      </pre>
-
-      <p>
-        where <code>MAD(v) = median(|v - median(v)|)</code>. The <code>1.4826</code> factor makes MAD a consistent
-        estimator of the standard deviation under a normal distribution (see{" "}
-        <a href="https://doi.org/10.1080/01621459.1993.10476408">Rousseeuw &amp; Croux, 1993</a> and{" "}
-        <a href="https://doi.org/10.1016/j.jesp.2013.03.013">Leys et al., 2013</a>).
-      </p>
-
-      <p>
-        Compared to <code>zscore</code>, this estimator tolerates a few extreme outliers in the cohort without being
-        pulled by them, which makes it well-suited for fleet- level anomaly detection. Returns <code>NaN</code> for
-        every sample when MAD is <code>0</code>
-        (constant vector, single sample, or a vector where a majority of values are equal — a known robustness/limit
-        tradeoff of MAD). Native histogram samples are skipped; if any are present alongside floats, an info-level
-        annotation is emitted.
-      </p>
-    </>
-  ),
-  robust_zscore_over_time: (
-    <>
-      <p>
-        <strong>
-          This function has to be enabled via the{" "}
-          <a href="../feature_flags.md#experimental-promql-functions">feature flag</a>
-          <code>--enable-feature=promql-experimental-functions</code>.
-        </strong>
-      </p>
-
-      <p>
-        <code>robust_zscore_over_time(v range-vector)</code> returns the <em>robust</em> z-score (also known in the
-        literature as the <em>modified z-score</em>) of the most recent sample in the range relative to the median and
-        median absolute deviation (MAD) of all float samples in the range:
-      </p>
-
-      <pre>
-        <code>(last - median) / (1.4826 * MAD)</code>
-      </pre>
-
-      <p>
-        The constant and rationale are the same as for{" "}
-        <a href="#robust_zscore">
-          <code>robust_zscore()</code>
-        </a>
-        . This function is the outlier-resistant counterpart of
-        <a href="#zscore_over_time">
-          <code>zscore_over_time()</code>
-        </a>
-        : a single extreme value in the window does not skew the baseline. Returns <code>NaN</code> when MAD is{" "}
-        <code>0</code>. Native histogram samples are skipped; if any are present alongside floats, an info-level
-        annotation is emitted.
       </p>
     </>
   ),
@@ -4064,316 +4022,6 @@ const funcDocs: Record<string, React.ReactNode> = {
       </p>
     </>
   ),
-  time_to_threshold: (
-    <>
-      <p>
-        <strong>
-          This function has to be enabled via the{" "}
-          <a href="../feature_flags.md#experimental-promql-functions">feature flag</a>
-          <code>--enable-feature=promql-experimental-functions</code>.
-        </strong>
-      </p>
-
-      <p>
-        <code>time_to_threshold(v range-vector, threshold scalar)</code> returns the number of seconds, relative to the
-        current evaluation time, at which a linear-regression extrapolation of the range vector would reach{" "}
-        <code>threshold</code>. It is the inverse of
-        <code>predict_linear</code>: instead of answering &ldquo;what value at time now+t&rdquo;, it answers &ldquo;at
-        what t does the value cross T&rdquo;.
-      </p>
-
-      <p>
-        Positive results are in the future. Negative results mean the threshold has already been crossed under the same
-        extrapolation. Returns <code>NaN</code> when the regression slope is zero because the fitted line never crosses
-        the threshold. Very small non-zero slopes can return very large ETAs, matching the linear model.
-      </p>
-
-      <p>
-        The function should only be used with gauges and only works for float samples. Elements in the range vector that
-        contain only histogram samples are ignored entirely. For elements that contain a mix of float and histogram
-        samples, only the float samples are used as input, which is flagged by an info-level annotation.
-      </p>
-
-      <p>For example, to flag disks predicted to fill within the next 24 hours:</p>
-
-      <pre>
-        <code>time_to_threshold(node_filesystem_avail_bytes[1h], 0) &lt; 86400</code>
-      </pre>
-    </>
-  ),
-  timeseries_gen: (
-    <>
-      <p>
-        <strong>
-          This function has to be enabled via the{" "}
-          <a href="../feature_flags.md#experimental-promql-functions">feature flag</a>
-          <code>--enable-feature=promql-experimental-functions</code>.
-        </strong>
-      </p>
-
-      <p>
-        <code>timeseries_gen(tpl string, metric_name ...string)</code> emits a synthetic instant vector built from a Go{" "}
-        <a href="https://pkg.go.dev/text/template">
-          <code>text/template</code>
-        </a>{" "}
-        supplied as <code>tpl</code>. Its primary use case is providing inline &ldquo;filter&rdquo; series for{" "}
-        <code>*</code> / <code>on(...)</code>
-        joins without precomputing them via recording rules or storage:
-      </p>
-
-      <pre>
-        <code>
-          metric * on(env) timeseries_gen(`{"{"}
-          {"{"}rangeSeries &quot;env&quot; &quot;prod,stage,canary&quot; 1.0{"}"}
-          {"}"}`)
-        </code>
-      </pre>
-
-      <p>
-        The optional <code>metric_name</code> argument controls the <code>__name__</code> label on emitted series:
-      </p>
-
-      <ul>
-        <li>
-          If omitted (or empty), emitted series have no <code>__name__</code> label. This is the usual case for
-          join-filter usage where vector matching ignores
-          <code>__name__</code> anyway.
-        </li>
-        <li>
-          If provided and non-empty, every emitted series gets
-          <code>__name__=&lt;metric_name&gt;</code>.
-        </li>
-      </ul>
-
-      <p>
-        The template runs <strong>once per query</strong> and the result is cached, so range queries do not re-execute
-        the template at every step. Output cardinality is capped at 10000 series; exceeding the cap aborts the query.
-      </p>
-
-      <h3>Template helpers</h3>
-
-      <p>
-        Labels are supplied as flat <code>key, value, key, value, ...</code> variadic pairs — no embedded label-string
-        grammar, no escape hell.
-      </p>
-
-      <table>
-        <thead>
-          <tr>
-            <th>Helper</th>
-            <th>Signature</th>
-            <th>Effect</th>
-          </tr>
-        </thead>
-
-        <tbody>
-          <tr>
-            <td>
-              <code>series</code>
-            </td>
-            <td>
-              <code>series(value float, kvPairs ...string)</code>
-            </td>
-            <td>Emit one sample. Pairs must be even length.</td>
-          </tr>
-
-          <tr>
-            <td>
-              <code>rangeSeries</code>
-            </td>
-            <td>
-              <code>rangeSeries(fanoutLabel string, csv string, value float, kvPairs ...string)</code>
-            </td>
-            <td>
-              Emit one sample per comma-separated value of <code>csv</code>, with <code>fanoutLabel</code> set to that
-              value and any extra <code>kvPairs</code> attached to every emitted sample. Empty entries in{" "}
-              <code>csv</code> are skipped.
-            </td>
-          </tr>
-
-          <tr>
-            <td>
-              <code>seq</code>
-            </td>
-            <td>
-              <code>seq(start, end int)</code>
-            </td>
-            <td>Inclusive integer range.</td>
-          </tr>
-
-          <tr>
-            <td>
-              <code>split</code>
-            </td>
-            <td>
-              <code>split(s, sep string) []string</code>
-            </td>
-            <td>
-              Same as Go&rsquo;s <code>strings.Split</code>.
-            </td>
-          </tr>
-
-          <tr>
-            <td>
-              <code>lower</code> / <code>upper</code>
-            </td>
-            <td>
-              <code>lower(s) string</code> / <code>upper(s) string</code>
-            </td>
-            <td>Case conversion.</td>
-          </tr>
-
-          <tr>
-            <td>
-              <code>replace</code>
-            </td>
-            <td>
-              <code>replace(s, old, new string) string</code>
-            </td>
-            <td>
-              Same as Go&rsquo;s <code>strings.ReplaceAll</code>.
-            </td>
-          </tr>
-
-          <tr>
-            <td>
-              <code>trim</code>
-            </td>
-            <td>
-              <code>trim(s string) string</code>
-            </td>
-            <td>
-              Same as Go&rsquo;s <code>strings.TrimSpace</code>.
-            </td>
-          </tr>
-
-          <tr>
-            <td>
-              <code>add</code> / <code>sub</code> / <code>mul</code> / <code>div</code> / <code>mod</code>
-            </td>
-            <td>
-              <code>(a, b numeric) float</code>
-            </td>
-            <td>
-              Binary math; operands accept any integer or float type. <code>div</code> and <code>mod</code> reject a
-              zero divisor.
-            </td>
-          </tr>
-
-          <tr>
-            <td>
-              <code>int</code>
-            </td>
-            <td>
-              <code>(v numeric) int</code>
-            </td>
-            <td>
-              Truncate toward zero. Useful for feeding <code>printf &quot;%d&quot;</code> because the binary math
-              helpers always return float64.
-            </td>
-          </tr>
-
-          <tr>
-            <td>
-              <code>abs</code> / <code>floor</code> / <code>ceil</code> / <code>round</code>
-            </td>
-            <td>
-              <code>(v numeric) float</code>
-            </td>
-            <td>
-              <code>math.Abs</code> / <code>math.Floor</code> / <code>math.Ceil</code> / <code>math.Round</code>.
-            </td>
-          </tr>
-
-          <tr>
-            <td>
-              <code>min</code> / <code>max</code>
-            </td>
-            <td>
-              <code>(a, b numeric) float</code>
-            </td>
-            <td>
-              <code>math.Min</code> / <code>math.Max</code>.
-            </td>
-          </tr>
-
-          <tr>
-            <td>
-              <code>printf</code>
-            </td>
-            <td>(built-in)</td>
-            <td>
-              Standard Go template <code>printf</code>.
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      <p>Examples:</p>
-
-      <pre>
-        <code>
-          # One sample, two labels, with an explicit metric name. timeseries_gen(`{"{"}
-          {"{"}series 1.0 &quot;env&quot; &quot;prod&quot; &quot;job&quot; &quot;api&quot;{"}"}
-          {"}"}`, &quot;f&quot;) # Fan-out across env values plus a fixed job label (no __name__). timeseries_gen(`{"{"}
-          {"{"}rangeSeries &quot;env&quot; &quot;prod,stage,dev&quot; 1.0 &quot;job&quot; &quot;api&quot;{"}"}
-          {"}"}`) # Indexed series via seq + printf. timeseries_gen(`{"{"}
-          {"{"}range $i := seq 1 5{"}"}
-          {"}"}
-          {"{"}
-          {"{"}series 1.0 &quot;i&quot; (printf &quot;%d&quot; $i){"}"}
-          {"}"}
-          {"{"}
-          {"{"}end{"}"}
-          {"}"}`)
-        </code>
-      </pre>
-
-      <h3>Restrictions</h3>
-
-      <ul>
-        <li>
-          The{" "}
-          <code>
-            {"{"}
-            {"{"}define{"}"}
-            {"}"}
-          </code>{" "}
-          and{" "}
-          <code>
-            {"{"}
-            {"{"}template{"}"}
-            {"}"}
-          </code>{" "}
-          template actions are rejected at parse time to prevent recursive expansion.
-        </li>
-        <li>
-          When the <code>metric_name</code> argument is provided, the template MUST NOT set
-          <code>__name__</code> (via <code>kvPairs</code> or as a <code>rangeSeries</code> <code>fanoutLabel</code>) —
-          the function argument is the single source of truth.
-        </li>
-        <li>
-          When <code>metric_name</code> is omitted, the template MAY set <code>__name__</code> on a per-series basis via{" "}
-          <code>kvPairs</code>, or fan out over multiple metric names via{" "}
-          <code>rangeSeries &quot;__name__&quot; &quot;a,b,c&quot; ...</code>. This lets a single call emit several
-          related metrics.
-        </li>
-        <li>Each call must produce a unique label set; duplicates are a hard error.</li>
-        <li>
-          <code>seq</code> ranges are capped at 10000 items; exceeding the cap aborts the query.
-        </li>
-        <li>
-          Label names are validated under Prometheus&rsquo; UTF-8 label-name scheme, so dotted OpenTelemetry-style names
-          such as <code>http.method</code>,<code>service.name</code>, and <code>deployment.environment</code> are
-          accepted alongside the legacy <code>[a-zA-Z_][a-zA-Z0-9_]*</code> form. Dotted names must be quoted in PromQL
-          selectors, e.g.{" "}
-          <code>
-            {"{"}&quot;http.method&quot;=&quot;GET&quot;{"}"}
-          </code>
-          .
-        </li>
-      </ul>
-    </>
-  ),
   timestamp: (
     <>
       <p>
@@ -4832,81 +4480,6 @@ const funcDocs: Record<string, React.ReactNode> = {
         <code>year(v=vector(time()) instant-vector)</code> returns the year for each of the given times in UTC.
         Histogram samples in the input vector are ignored silently.
       </p>
-    </>
-  ),
-  zscore: (
-    <>
-      <p>
-        <strong>
-          This function has to be enabled via the{" "}
-          <a href="../feature_flags.md#experimental-promql-functions">feature flag</a>
-          <code>--enable-feature=promql-experimental-functions</code>.
-        </strong>
-      </p>
-
-      <p>
-        <code>zscore(v instant-vector)</code> returns the z-score of each float sample in the instant vector relative to
-        the mean and standard deviation of the float samples across the vector at the same evaluation timestamp:
-      </p>
-
-      <pre>
-        <code>(v - avg(v)) / stddev(v)</code>
-      </pre>
-
-      <p>
-        This is useful for cross-series anomaly detection at a single instant: values near <code>0</code> mean the
-        series is close to the cohort&rsquo;s typical value, while magnitudes greater than roughly <code>2</code>-
-        <code>3</code> indicate series that deviate from their peers. Returns <code>NaN</code> for every sample when the
-        standard deviation is
-        <code>0</code> (constant vector or single sample). Native histogram samples are skipped; if any are present
-        alongside floats, an info-level annotation is emitted.
-      </p>
-
-      <p>
-        For example, to flag instances whose current request latency deviates by more than three standard deviations
-        from the rest of the fleet:
-      </p>
-
-      <pre>
-        <code>abs(zscore(http_request_duration_seconds)) &gt; 3</code>
-      </pre>
-    </>
-  ),
-  zscore_over_time: (
-    <>
-      <p>
-        <strong>
-          This function has to be enabled via the{" "}
-          <a href="../feature_flags.md#experimental-promql-functions">feature flag</a>
-          <code>--enable-feature=promql-experimental-functions</code>.
-        </strong>
-      </p>
-
-      <p>
-        <code>zscore_over_time(v range-vector)</code> returns the z-score of the most recent sample in the range
-        relative to the mean and standard deviation of all float samples in the range:
-      </p>
-
-      <pre>
-        <code>(ts - avg_over_time(ts[range])) / stddev_over_time(ts[range])</code>
-      </pre>
-
-      <p>
-        This is useful for anomaly detection: values near <code>0</code> mean the latest sample is close to the recent
-        window&rsquo;s typical value, while magnitudes greater than roughly <code>2</code>-<code>3</code> indicate the
-        latest sample is an outlier compared to the window. Returns <code>NaN</code> when the standard deviation is{" "}
-        <code>0</code> (constant series or single sample). Native histogram samples are ignored silently, as with
-        <code>stddev_over_time</code>.
-      </p>
-
-      <p>
-        For example, to flag request latency that is more than three standard deviations away from its own behaviour
-        over the past hour:
-      </p>
-
-      <pre>
-        <code>abs(zscore_over_time(http_request_duration_seconds[1h])) &gt; 3</code>
-      </pre>
     </>
   ),
 };

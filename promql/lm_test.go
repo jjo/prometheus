@@ -24,7 +24,7 @@ import (
 func designFor(cols ...[]float64) [][]float64 {
 	n := len(cols[0])
 	a := make([][]float64, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		row := make([]float64, len(cols)+1)
 		row[0] = 1
 		for j, c := range cols {

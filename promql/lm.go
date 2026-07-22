@@ -80,7 +80,7 @@ func householderLeastSquares(a [][]float64, b []float64) ([]float64, bool) {
 	}
 	y := slices.Clone(b)
 
-	for k := 0; k < p; k++ {
+	for k := range p {
 		// Norm of the sub-column r[k:n][k].
 		var sigma float64
 		for i := k; i < n; i++ {
@@ -511,7 +511,7 @@ func (ev *evaluator) evalLMOverTime(ctx context.Context, e *parser.Call) (parser
 			if ev.currentSamples > ev.maxSamples {
 				ev.error(ErrTooManySamples(env))
 			}
-			for j := 0; j < k; j++ {
+			for j := range k {
 				if coeffSeries[j].Floats == nil {
 					coeffSeries[j].Floats = getFPointSlice(numSteps)
 				}
@@ -560,8 +560,8 @@ func (ev *evaluator) evalLMOverTime(ctx context.Context, e *parser.Call) (parser
 // predictor range vectors by label set (ignoring __name__) and emit the OLS
 // slope per matched pair, matching regression_over_time's default output.
 func (ev *evaluator) lmBivariate(
-	ctx context.Context, e *parser.Call,
-	selX, selY *parser.MatrixSelector,
+	ctx context.Context, _ *parser.Call,
+	_, selY *parser.MatrixSelector,
 	vsX, vsY *parser.VectorSelector,
 	respBySig map[uint64]int,
 	rangeX, rangeY, offsetX, offsetY int64,

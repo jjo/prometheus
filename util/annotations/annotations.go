@@ -369,10 +369,10 @@ func NewReservedLMInterceptLabelWarning(labelName string, pos posrange.PositionR
 
 // NewTooManyLMPredictorsWarning is used when an lm_over_time predictor group has
 // more distinct pivot-label values than the implementation supports.
-func NewTooManyLMPredictorsWarning(count, max int, pos posrange.PositionRange) error {
+func NewTooManyLMPredictorsWarning(count, maxCount int, pos posrange.PositionRange) error {
 	return &annoErr{
 		PositionRange: pos,
-		Err:           fmt.Errorf("%w: %d > %d", TooManyLMPredictorsWarning, count, max),
+		Err:           fmt.Errorf("%w: %d > %d", TooManyLMPredictorsWarning, count, maxCount),
 	}
 }
 
