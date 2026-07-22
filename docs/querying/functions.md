@@ -894,6 +894,14 @@ flag](../feature_flags.md#experimental-promql-functions)
 number of seconds since January 1, 1970 UTC. For instant queries, this is equal
 to the evaluation timestamp.
 
+## `start_timestamp()`
+
+`start_timestamp(v instant-vector)` returns the start timestamp of each of the samples of
+the given vector as the number of seconds since January 1, 1970 UTC. It acts on
+float and histogram samples in the same way.
+
+This function only works when used directly on an instant vector and when `use-start-timestamps` feature flag is enabled. Otherwise, if it's used on an expression or if `use-start-timestamps` is disabled, it returns empty results.
+
 ## `step()`
 
 **This function has to be enabled via the [feature
@@ -908,6 +916,36 @@ queries, this returns `0`.
 `time()` returns the number of seconds since January 1, 1970 UTC. Note that
 this does not actually return the current time, but the time at which the
 expression is to be evaluated.
+
+## `time_to_threshold()`
+
+**This function has to be enabled via the [feature
+flag](../feature_flags.md#experimental-promql-functions)
+`--enable-feature=promql-experimental-functions`.**
+
+`time_to_threshold(v range-vector, threshold scalar)` returns the number of
+seconds, relative to the current evaluation time, at which a linear-regression
+extrapolation of the range vector would reach `threshold`. It is the inverse of
+`predict_linear`: instead of answering "what value at time now+t", it answers
+"at what t does the value cross T".
+
+Positive results are in the future. Negative results mean the threshold has
+already been crossed under the same extrapolation. Returns `NaN` when the
+regression slope is zero because the fitted line never crosses the threshold.
+Very small non-zero slopes can return very large ETAs, matching the linear
+model.
+
+The function should only be used with gauges and only works for float samples.
+Elements in the range vector that contain only histogram samples are ignored
+entirely. For elements that contain a mix of float and histogram samples, only
+the float samples are used as input, which is flagged by an info-level
+annotation.
+
+For example, to flag disks predicted to fill within the next 24 hours:
+
+```
+time_to_threshold(node_filesystem_avail_bytes[1h], 0) < 86400
+```
 
 ## `timestamp()`
 
@@ -939,6 +977,7 @@ over time and return an instant vector with per-series aggregation results:
 * `stddev_over_time(range-vector)`: the population standard deviation of all float samples in the specified interval.
 * `stdvar_over_time(range-vector)`: the population variance of all float samples in the specified interval.
 * `last_over_time(range-vector)`: the most recent sample in the specified interval.
+* `first_over_time(range-vector)`: the oldest sample in the specified interval.
 * `present_over_time(range-vector)`: the value 1 for any series in the specified interval.
 
 If the [feature flag](../feature_flags.md#experimental-promql-functions)
@@ -953,7 +992,6 @@ additional functions are available:
   that has the maximum value of all float samples in the specified interval.
 * `ts_of_last_over_time(range-vector)`: the timestamp of last sample in the
   specified interval.
-* `first_over_time(range-vector)`: the oldest sample in the specified interval.
 * `ts_of_first_over_time(range-vector)`: the timestamp of earliest sample in the
   specified interval.
 
@@ -979,8 +1017,7 @@ These functions act on histograms in the following way:
 select the first sample of `m` _within_ the 1m range, where `m offset 1m` will
 select the most recent sample within the lookback interval _outside and prior
 to_ the 1m offset. This is particularly useful with `first_over_time(m[step()])`
-in range queries (available when `--enable-feature=promql-duration-expr` is set)
-to ensure that the sample selected is within the range step.
+in range queries to ensure that the sample selected is within the range step.
 
 ## Trigonometric Functions
 
