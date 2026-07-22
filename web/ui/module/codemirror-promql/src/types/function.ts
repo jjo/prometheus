@@ -38,6 +38,7 @@ import {
   Delta,
   Deriv,
   EndFn,
+  EwmaOverTime,
   Exp,
   FirstOverTime,
   Floor,
@@ -89,6 +90,7 @@ import {
   SortByLabelDesc,
   Sqrt,
   StartFn,
+  StartTimestamp,
   Step,
   StddevOverTime,
   StdvarOverTime,
@@ -274,6 +276,12 @@ const promqlFunctions: { [key: number]: PromQLFunction } = {
     argTypes: [],
     variadic: 0,
     returnType: ValueType.scalar,
+  },
+  [EwmaOverTime]: {
+    name: 'ewma_over_time',
+    argTypes: [ValueType.matrix, ValueType.scalar],
+    variadic: 0,
+    returnType: ValueType.vector,
   },
   [Exp]: {
     name: 'exp',
@@ -580,6 +588,12 @@ const promqlFunctions: { [key: number]: PromQLFunction } = {
     argTypes: [],
     variadic: 0,
     returnType: ValueType.scalar,
+  },
+  [StartTimestamp]: {
+    name: 'start_timestamp',
+    argTypes: [ValueType.vector],
+    variadic: 0,
+    returnType: ValueType.vector,
   },
   [Step]: {
     name: 'step',

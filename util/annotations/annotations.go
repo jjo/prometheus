@@ -149,6 +149,7 @@ var (
 
 	InvalidRatioWarning                     = fmt.Errorf("%w: ratio value should be between -1 and 1", PromQLWarning)
 	InvalidQuantileWarning                  = fmt.Errorf("%w: quantile value should be between 0 and 1", PromQLWarning)
+	InvalidSmoothingFactorWarning           = fmt.Errorf("%w: smoothing factor alpha must be in (0, 1]", PromQLWarning)
 	BadBucketLabelWarning                   = fmt.Errorf("%w: bucket label %q is missing or has a malformed value", PromQLWarning, model.BucketLabel)
 	MixedFloatsHistogramsWarning            = fmt.Errorf("%w: encountered a mix of histograms and floats for", PromQLWarning)
 	MixedClassicNativeHistogramsWarning     = fmt.Errorf("%w: vector contains a mix of classic and native histograms", PromQLWarning)
@@ -169,6 +170,7 @@ var (
 	NativeHistogramFractionNaNsInfo         = fmt.Errorf("%w: input to histogram_fraction has NaN observations, which are excluded from all fractions", PromQLInfo)
 	HistogramCounterResetCollisionWarning   = fmt.Errorf("%w: conflicting counter resets during histogram", PromQLWarning)
 	MismatchedCustomBucketsHistogramsInfo   = fmt.Errorf("%w: mismatched custom buckets were reconciled during", PromQLInfo)
+	StartTimeOverlapWarning                 = fmt.Errorf("%w: sample has start time that overlaps with previous sample timestamp", PromQLWarning)
 )
 
 // annoError extends the standard error interface to provide additional functionality
@@ -226,6 +228,15 @@ func NewInvalidQuantileWarning(q float64, pos posrange.PositionRange) error {
 	return &annoErr{
 		PositionRange: pos,
 		Err:           fmt.Errorf("%w, got %g", InvalidQuantileWarning, q),
+	}
+}
+
+// NewInvalidSmoothingFactorWarning is used when the user specifies an invalid
+// smoothing factor (alpha) for ewma_over_time, i.e. a float outside (0, 1] or NaN.
+func NewInvalidSmoothingFactorWarning(alpha float64, pos posrange.PositionRange) error {
+	return &annoErr{
+		PositionRange: pos,
+		Err:           fmt.Errorf("%w, got %g", InvalidSmoothingFactorWarning, alpha),
 	}
 }
 
@@ -487,5 +498,57 @@ func NewMismatchedCustomBucketsHistogramsInfo(pos posrange.PositionRange, operat
 	return &annoErr{
 		PositionRange: pos,
 		Err:           fmt.Errorf("%w %s", MismatchedCustomBucketsHistogramsInfo, operation.String()),
+	}
+}
+
+type startTimeOverlapErr struct {
+	PositionRange posrange.PositionRange
+	Err           error
+	Query         string
+	metricName    string
+	count         int
+}
+
+func (e *startTimeOverlapErr) Error() string {
+	if e.Query == "" {
+		// Don't include count when query is empty to allow proper deduplication.
+		return fmt.Sprintf("%s for metric %q", e.Err, e.metricName)
+	}
+	if e.count > 1 {
+		return fmt.Sprintf("%s for metric %q (%d occurrences) (%s)", e.Err, e.metricName, e.count, e.PositionRange.StartPosInput(e.Query, 0))
+	}
+	return fmt.Sprintf("%s for metric %q (%s)", e.Err, e.metricName, e.PositionRange.StartPosInput(e.Query, 0))
+}
+
+func (e *startTimeOverlapErr) Unwrap() error {
+	return e.Err
+}
+
+func (e *startTimeOverlapErr) SetQuery(query string) {
+	e.Query = query
+}
+
+func (e *startTimeOverlapErr) Merge(other error) error {
+	var o *startTimeOverlapErr
+	ok := errors.As(other, &o)
+	if !ok {
+		return e
+	}
+	if e.Err.Error() != o.Err.Error() || e.metricName != o.metricName {
+		return e
+	}
+	o.count += e.count
+	return o
+}
+
+// NewStartTimeOverlapWarning is used when a sample's start time overlaps with a
+// previous sample's timestamp, indicating potential data quality issues.
+// This applies to both delta and cumulative counter metrics.
+func NewStartTimeOverlapWarning(metricName string, pos posrange.PositionRange) error {
+	return &startTimeOverlapErr{
+		PositionRange: pos,
+		Err:           StartTimeOverlapWarning,
+		metricName:    metricName,
+		count:         1,
 	}
 }

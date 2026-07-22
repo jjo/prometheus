@@ -160,16 +160,21 @@ var Functions = map[string]*Function{
 		ArgTypes:   []ValueType{ValueTypeMatrix},
 		ReturnType: ValueTypeVector,
 	},
+	"ewma_over_time": {
+		Name:         "ewma_over_time",
+		ArgTypes:     []ValueType{ValueTypeMatrix, ValueTypeScalar},
+		ReturnType:   ValueTypeVector,
+		Experimental: true,
+	},
 	"exp": {
 		Name:       "exp",
 		ArgTypes:   []ValueType{ValueTypeVector},
 		ReturnType: ValueTypeVector,
 	},
 	"first_over_time": {
-		Name:         "first_over_time",
-		ArgTypes:     []ValueType{ValueTypeMatrix},
-		ReturnType:   ValueTypeVector,
-		Experimental: true,
+		Name:       "first_over_time",
+		ArgTypes:   []ValueType{ValueTypeMatrix},
+		ReturnType: ValueTypeVector,
 	},
 	"floor": {
 		Name:       "floor",
@@ -447,6 +452,12 @@ var Functions = map[string]*Function{
 		Name:         "start",
 		ArgTypes:     []ValueType{},
 		ReturnType:   ValueTypeScalar,
+		Experimental: true,
+	},
+	"start_timestamp": {
+		Name:         "start_timestamp",
+		ArgTypes:     []ValueType{ValueTypeVector},
+		ReturnType:   ValueTypeVector,
 		Experimental: true,
 	},
 	"step": {

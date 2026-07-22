@@ -207,6 +207,38 @@ samples are ignored entirely. For elements that contain a mix of float and
 histogram samples, only the float samples are used as input, which is flagged
 by an info-level annotation.
 
+## `ewma_over_time()`
+
+**This function has to be enabled via the [feature
+flag](../feature_flags.md#experimental-promql-functions)
+`--enable-feature=promql-experimental-functions`.**
+
+`ewma_over_time(v range-vector, alpha scalar)` returns the
+exponentially-weighted moving average of the float samples in the range vector
+for a smoothing factor `alpha` in `(0, 1]`:
+
+```
+s[i] = alpha * x[i] + (1 - alpha) * s[i-1], with s[0] = x[0]
+```
+
+Higher `alpha` tracks the most recent samples more responsively; lower `alpha`
+applies heavier smoothing of older history. Compared to `avg_over_time`, EWMA
+weights recent observations more, so it can track gradual drifts while damping
+per-scrape noise.
+
+Returns `NaN` per series for an out-of-range or `NaN` `alpha`, with a
+warning-level annotation. Histogram samples are skipped. Ranges containing only
+histogram samples are silently removed from the output, while ranges containing
+a mix of float and histogram samples use only the float samples and emit an
+info-level annotation.
+
+For example, to alert on sustained request-latency drift while dampening
+per-scrape noise:
+
+```
+ewma_over_time(http_request_duration_seconds[30m], 0.2) > 0.5
+```
+
 ## `exp()`
 
 `exp(v instant-vector)` calculates the exponential function for all float
@@ -894,6 +926,14 @@ flag](../feature_flags.md#experimental-promql-functions)
 number of seconds since January 1, 1970 UTC. For instant queries, this is equal
 to the evaluation timestamp.
 
+## `start_timestamp()`
+
+`start_timestamp(v instant-vector)` returns the start timestamp of each of the samples of
+the given vector as the number of seconds since January 1, 1970 UTC. It acts on
+float and histogram samples in the same way.
+
+This function only works when used directly on an instant vector and when `use-start-timestamps` feature flag is enabled. Otherwise, if it's used on an expression or if `use-start-timestamps` is disabled, it returns empty results.
+
 ## `step()`
 
 **This function has to be enabled via the [feature
@@ -939,6 +979,7 @@ over time and return an instant vector with per-series aggregation results:
 * `stddev_over_time(range-vector)`: the population standard deviation of all float samples in the specified interval.
 * `stdvar_over_time(range-vector)`: the population variance of all float samples in the specified interval.
 * `last_over_time(range-vector)`: the most recent sample in the specified interval.
+* `first_over_time(range-vector)`: the oldest sample in the specified interval.
 * `present_over_time(range-vector)`: the value 1 for any series in the specified interval.
 
 If the [feature flag](../feature_flags.md#experimental-promql-functions)
@@ -953,7 +994,6 @@ additional functions are available:
   that has the maximum value of all float samples in the specified interval.
 * `ts_of_last_over_time(range-vector)`: the timestamp of last sample in the
   specified interval.
-* `first_over_time(range-vector)`: the oldest sample in the specified interval.
 * `ts_of_first_over_time(range-vector)`: the timestamp of earliest sample in the
   specified interval.
 
@@ -979,8 +1019,7 @@ These functions act on histograms in the following way:
 select the first sample of `m` _within_ the 1m range, where `m offset 1m` will
 select the most recent sample within the lookback interval _outside and prior
 to_ the 1m offset. This is particularly useful with `first_over_time(m[step()])`
-in range queries (available when `--enable-feature=promql-duration-expr` is set)
-to ensure that the sample selected is within the range step.
+in range queries to ensure that the sample selected is within the range step.
 
 ## Trigonometric Functions
 
