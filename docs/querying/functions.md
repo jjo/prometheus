@@ -627,6 +627,28 @@ At the current stage, this is an experiment to find out how useful the approach
 turns out to be in practice. A final version of the `info` function will indeed
 consider all matching info series and with their appropriate identifying labels.
 
+## `integral()`
+
+**This function has to be enabled via the [feature
+flag](../feature_flags.md#experimental-promql-functions)
+`--enable-feature=promql-experimental-functions`.**
+
+`integral(v range-vector, strategy=2 scalar)` calculates the integral of the
+time series over time in seconds. The optional `strategy` controls which
+quadrature rule is used for each interval: `0` for the left-point rectangle
+rule, `1` for the right-point rectangle rule, and `2` for the trapezoidal rule
+using the average of the adjacent samples. The default is `2`.
+
+`integral` should only be used with gauges, most likely representing a rate in
+units per second.
+
+For example, to calculate the total nodes cost accumulated the last 7 days,
+given its hourly cost:
+
+```
+integral(hourly_cost{job="nodes"}[7d]) / 3600
+```
+
 ## `irate()`
 
 `irate(v range-vector)` calculates the per-second instant rate of increase of
@@ -894,6 +916,14 @@ flag](../feature_flags.md#experimental-promql-functions)
 number of seconds since January 1, 1970 UTC. For instant queries, this is equal
 to the evaluation timestamp.
 
+## `start_timestamp()`
+
+`start_timestamp(v instant-vector)` returns the start timestamp of each of the samples of
+the given vector as the number of seconds since January 1, 1970 UTC. It acts on
+float and histogram samples in the same way.
+
+This function only works when used directly on an instant vector and when `use-start-timestamps` feature flag is enabled. Otherwise, if it's used on an expression or if `use-start-timestamps` is disabled, it returns empty results.
+
 ## `step()`
 
 **This function has to be enabled via the [feature
@@ -939,6 +969,7 @@ over time and return an instant vector with per-series aggregation results:
 * `stddev_over_time(range-vector)`: the population standard deviation of all float samples in the specified interval.
 * `stdvar_over_time(range-vector)`: the population variance of all float samples in the specified interval.
 * `last_over_time(range-vector)`: the most recent sample in the specified interval.
+* `first_over_time(range-vector)`: the oldest sample in the specified interval.
 * `present_over_time(range-vector)`: the value 1 for any series in the specified interval.
 
 If the [feature flag](../feature_flags.md#experimental-promql-functions)
@@ -953,7 +984,6 @@ additional functions are available:
   that has the maximum value of all float samples in the specified interval.
 * `ts_of_last_over_time(range-vector)`: the timestamp of last sample in the
   specified interval.
-* `first_over_time(range-vector)`: the oldest sample in the specified interval.
 * `ts_of_first_over_time(range-vector)`: the timestamp of earliest sample in the
   specified interval.
 
@@ -979,8 +1009,7 @@ These functions act on histograms in the following way:
 select the first sample of `m` _within_ the 1m range, where `m offset 1m` will
 select the most recent sample within the lookback interval _outside and prior
 to_ the 1m offset. This is particularly useful with `first_over_time(m[step()])`
-in range queries (available when `--enable-feature=promql-duration-expr` is set)
-to ensure that the sample selected is within the range step.
+in range queries to ensure that the sample selected is within the range step.
 
 ## Trigonometric Functions
 

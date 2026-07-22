@@ -15,6 +15,8 @@ package v1
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -954,10 +956,12 @@ func TestStats(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		name     string
-		renderer StatsRenderer
-		param    string
-		expected func(*testing.T, any)
+		name        string
+		renderer    StatsRenderer
+		param       string
+		wantErr     errorType
+		wantWarning bool
+		expected    func(*testing.T, any)
 	}{
 		{
 			name:  "stats is blank",
@@ -969,6 +973,28 @@ func TestStats(t *testing.T) {
 			},
 		},
 		{
+			name:        "stats is an unsupported value",
+			param:       "foo",
+			wantWarning: true,
+			expected: func(t *testing.T, i any) {
+				// Deprecated values keep the historical behaviour for now:
+				// any non-empty value enables basic statistics.
+				require.IsType(t, &QueryData{}, i)
+				qd := i.(*QueryData)
+				require.NotNil(t, qd.Stats)
+			},
+		},
+		{
+			name:        "stats is an unsupported truthy value",
+			param:       "1",
+			wantWarning: true,
+			expected: func(t *testing.T, i any) {
+				require.IsType(t, &QueryData{}, i)
+				qd := i.(*QueryData)
+				require.NotNil(t, qd.Stats)
+			},
+		},
+		{
 			name:  "stats is true",
 			param: "true",
 			expected: func(t *testing.T, i any) {
@@ -977,10 +1003,15 @@ func TestStats(t *testing.T) {
 				require.NotNil(t, qd.Stats)
 				qs := qd.Stats.Builtin()
 				require.NotNil(t, qs.Timings)
-				require.Greater(t, qs.Timings.EvalTotalTime, float64(0))
+				// GreaterOrEqual, not Greater: on Windows the monotonic clock has
+				// millisecond-scale granularity, so evaluating this trivial query
+				// legitimately measures 0. Non-nil Timings already proves the
+				// timings were populated.
+				require.GreaterOrEqual(t, qs.Timings.EvalTotalTime, float64(0))
 				require.NotNil(t, qs.Samples)
 				require.NotNil(t, qs.Samples.TotalQueryableSamples)
 				require.Nil(t, qs.Samples.TotalQueryableSamplesPerStep)
+				require.GreaterOrEqual(t, qs.Samples.SamplesRead, int64(0))
 			},
 		},
 		{
@@ -992,10 +1023,16 @@ func TestStats(t *testing.T) {
 				require.NotNil(t, qd.Stats)
 				qs := qd.Stats.Builtin()
 				require.NotNil(t, qs.Timings)
-				require.Greater(t, qs.Timings.EvalTotalTime, float64(0))
+				// GreaterOrEqual, not Greater: on Windows the monotonic clock has
+				// millisecond-scale granularity, so evaluating this trivial query
+				// legitimately measures 0. Non-nil Timings already proves the
+				// timings were populated.
+				require.GreaterOrEqual(t, qs.Timings.EvalTotalTime, float64(0))
 				require.NotNil(t, qs.Samples)
 				require.NotNil(t, qs.Samples.TotalQueryableSamples)
 				require.NotNil(t, qs.Samples.TotalQueryableSamplesPerStep)
+				require.GreaterOrEqual(t, qs.Samples.SamplesRead, int64(0))
+				require.NotNil(t, qs.Samples.SamplesReadPerStep)
 			},
 		},
 		{
@@ -1019,21 +1056,41 @@ func TestStats(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			before := api.statsRenderer
-			defer func() { api.statsRenderer = before }()
+			before, customBefore := api.statsRenderer, api.customStatsRenderer
+			defer func() { api.statsRenderer, api.customStatsRenderer = before, customBefore }()
+			// Installing a renderer through NewAPI marks it as custom, which
+			// exempts the `stats` value from validation; mirror that here.
 			api.statsRenderer = tc.renderer
+			api.customStatsRenderer = tc.renderer != nil
+
+			assertWarnings := func(res apiFuncResult) {
+				if tc.wantWarning {
+					require.Len(t, res.warnings, 1)
+					for msg := range res.warnings {
+						require.Contains(t, msg, "deprecated")
+					}
+				} else {
+					require.Empty(t, res.warnings)
+				}
+			}
 
 			for _, method := range []string{http.MethodGet, http.MethodPost} {
 				ctx := context.Background()
 				req, err := request(method, tc.param)
 				require.NoError(t, err)
 				res := api.query(req.WithContext(ctx))
-				assertAPIError(t, res.err, errorNone)
-				tc.expected(t, res.data)
+				assertAPIError(t, res.err, tc.wantErr)
+				if tc.wantErr == errorNone {
+					tc.expected(t, res.data)
+					assertWarnings(res)
+				}
 
 				res = api.queryRange(req.WithContext(ctx))
-				assertAPIError(t, res.err, errorNone)
-				tc.expected(t, res.data)
+				assertAPIError(t, res.err, tc.wantErr)
+				if tc.wantErr == errorNone {
+					tc.expected(t, res.data)
+					assertWarnings(res)
+				}
 			}
 		})
 	}
@@ -1774,7 +1831,7 @@ func testEndpoints(t *testing.T, api *API, tr *testTargetRetriever, testLabelAPI
 			response: &TargetDiscovery{
 				ActiveTargets: []*Target{
 					{
-						DiscoveredLabels:   labels.FromStrings("__param_target", "example.com", "__scrape_interval__", "0s", "__scrape_timeout__", "0s"),
+						DiscoveredLabels:   labels.FromStrings("__always_scrape_classic_histograms__", "false", "__convert_classic_histograms_to_nhcb__", "false", "__param_target", "example.com", "__scrape_interval__", "0s", "__scrape_native_histograms__", "false", "__scrape_timeout__", "0s"),
 						Labels:             labels.FromStrings("job", "blackbox"),
 						ScrapePool:         "blackbox",
 						ScrapeURL:          "http://localhost:9115/probe?target=example.com",
@@ -1787,7 +1844,7 @@ func testEndpoints(t *testing.T, api *API, tr *testTargetRetriever, testLabelAPI
 						ScrapeTimeout:      "10s",
 					},
 					{
-						DiscoveredLabels:   labels.FromStrings("__scrape_interval__", "0s", "__scrape_timeout__", "0s"),
+						DiscoveredLabels:   labels.FromStrings("__always_scrape_classic_histograms__", "false", "__convert_classic_histograms_to_nhcb__", "false", "__scrape_interval__", "0s", "__scrape_native_histograms__", "false", "__scrape_timeout__", "0s"),
 						Labels:             labels.FromStrings("job", "test"),
 						ScrapePool:         "test",
 						ScrapeURL:          "http://example.com:8080/metrics",
@@ -1804,10 +1861,13 @@ func testEndpoints(t *testing.T, api *API, tr *testTargetRetriever, testLabelAPI
 					{
 						DiscoveredLabels: labels.FromStrings(
 							"__address__", "http://dropped.example.com:9115",
+							"__always_scrape_classic_histograms__", "false",
+							"__convert_classic_histograms_to_nhcb__", "false",
 							"__metrics_path__", "/probe",
 							"__scheme__", "http",
 							"job", "blackbox",
 							"__scrape_interval__", "30s",
+							"__scrape_native_histograms__", "false",
 							"__scrape_timeout__", "15s",
 						),
 						ScrapePool: "blackbox",
@@ -1824,7 +1884,7 @@ func testEndpoints(t *testing.T, api *API, tr *testTargetRetriever, testLabelAPI
 			response: &TargetDiscovery{
 				ActiveTargets: []*Target{
 					{
-						DiscoveredLabels:   labels.FromStrings("__param_target", "example.com", "__scrape_interval__", "0s", "__scrape_timeout__", "0s"),
+						DiscoveredLabels:   labels.FromStrings("__always_scrape_classic_histograms__", "false", "__convert_classic_histograms_to_nhcb__", "false", "__param_target", "example.com", "__scrape_interval__", "0s", "__scrape_native_histograms__", "false", "__scrape_timeout__", "0s"),
 						Labels:             labels.FromStrings("job", "blackbox"),
 						ScrapePool:         "blackbox",
 						ScrapeURL:          "http://localhost:9115/probe?target=example.com",
@@ -1837,7 +1897,7 @@ func testEndpoints(t *testing.T, api *API, tr *testTargetRetriever, testLabelAPI
 						ScrapeTimeout:      "10s",
 					},
 					{
-						DiscoveredLabels:   labels.FromStrings("__scrape_interval__", "0s", "__scrape_timeout__", "0s"),
+						DiscoveredLabels:   labels.FromStrings("__always_scrape_classic_histograms__", "false", "__convert_classic_histograms_to_nhcb__", "false", "__scrape_interval__", "0s", "__scrape_native_histograms__", "false", "__scrape_timeout__", "0s"),
 						Labels:             labels.FromStrings("job", "test"),
 						ScrapePool:         "test",
 						ScrapeURL:          "http://example.com:8080/metrics",
@@ -1854,10 +1914,13 @@ func testEndpoints(t *testing.T, api *API, tr *testTargetRetriever, testLabelAPI
 					{
 						DiscoveredLabels: labels.FromStrings(
 							"__address__", "http://dropped.example.com:9115",
+							"__always_scrape_classic_histograms__", "false",
+							"__convert_classic_histograms_to_nhcb__", "false",
 							"__metrics_path__", "/probe",
 							"__scheme__", "http",
 							"job", "blackbox",
 							"__scrape_interval__", "30s",
+							"__scrape_native_histograms__", "false",
 							"__scrape_timeout__", "15s",
 						),
 						ScrapePool: "blackbox",
@@ -1874,7 +1937,7 @@ func testEndpoints(t *testing.T, api *API, tr *testTargetRetriever, testLabelAPI
 			response: &TargetDiscovery{
 				ActiveTargets: []*Target{
 					{
-						DiscoveredLabels:   labels.FromStrings("__param_target", "example.com", "__scrape_interval__", "0s", "__scrape_timeout__", "0s"),
+						DiscoveredLabels:   labels.FromStrings("__always_scrape_classic_histograms__", "false", "__convert_classic_histograms_to_nhcb__", "false", "__param_target", "example.com", "__scrape_interval__", "0s", "__scrape_native_histograms__", "false", "__scrape_timeout__", "0s"),
 						Labels:             labels.FromStrings("job", "blackbox"),
 						ScrapePool:         "blackbox",
 						ScrapeURL:          "http://localhost:9115/probe?target=example.com",
@@ -1887,7 +1950,7 @@ func testEndpoints(t *testing.T, api *API, tr *testTargetRetriever, testLabelAPI
 						ScrapeTimeout:      "10s",
 					},
 					{
-						DiscoveredLabels:   labels.FromStrings("__scrape_interval__", "0s", "__scrape_timeout__", "0s"),
+						DiscoveredLabels:   labels.FromStrings("__always_scrape_classic_histograms__", "false", "__convert_classic_histograms_to_nhcb__", "false", "__scrape_interval__", "0s", "__scrape_native_histograms__", "false", "__scrape_timeout__", "0s"),
 						Labels:             labels.FromStrings("job", "test"),
 						ScrapePool:         "test",
 						ScrapeURL:          "http://example.com:8080/metrics",
@@ -1914,10 +1977,13 @@ func testEndpoints(t *testing.T, api *API, tr *testTargetRetriever, testLabelAPI
 					{
 						DiscoveredLabels: labels.FromStrings(
 							"__address__", "http://dropped.example.com:9115",
+							"__always_scrape_classic_histograms__", "false",
+							"__convert_classic_histograms_to_nhcb__", "false",
 							"__metrics_path__", "/probe",
 							"__scheme__", "http",
 							"job", "blackbox",
 							"__scrape_interval__", "30s",
+							"__scrape_native_histograms__", "false",
 							"__scrape_timeout__", "15s",
 						),
 						ScrapePool: "blackbox",
@@ -2382,7 +2448,7 @@ func testEndpoints(t *testing.T, api *API, tr *testTargetRetriever, testLabelAPI
 					},
 				},
 				{
-					identifier: "secondTarget",
+					identifier: "blackbox",
 					metadata: []scrape.MetricMetadata{
 						{
 							MetricFamily: "go_threads",
@@ -3823,9 +3889,8 @@ func testEndpoints(t *testing.T, api *API, tr *testTargetRetriever, testLabelAPI
 
 					tr.ResetMetadataStore()
 					for _, tm := range test.metadata {
-						// TODO: Check error and fixed broken test/bug.
-						// TestEndpoints/local/run_60_metricMetadata_"limit=1&limit_per_metric=1"/GET fails if we check the error.
-						_ = tr.SetMetadataStoreForTargets(tm.identifier, &testMetaStore{Metadata: tm.metadata})
+						err := tr.SetMetadataStoreForTargets(tm.identifier, &testMetaStore{Metadata: tm.metadata})
+						require.NoError(t, err)
 					}
 
 					res := test.endpoint(req.WithContext(ctx))
@@ -5011,4 +5076,16 @@ func TestDeleteSeriesEndpointRemoved(t *testing.T) {
 	// so we must not get the old 500 error.
 	require.NotEqual(t, http.StatusInternalServerError, recorder.Code,
 		"DELETE /api/v1/series should no longer return 500; the endpoint has been removed")
+}
+
+func TestGetRuleGroupNextToken(t *testing.T) {
+	// The token is a SHA-256 hex digest, so it must be deterministic and 64
+	// characters long.
+	token := getRuleGroupNextToken("/path/to/file", "group")
+	require.Len(t, token, hex.EncodedLen(sha256.Size))
+	require.Equal(t, token, getRuleGroupNextToken("/path/to/file", "group"))
+
+	// Distinct file and group inputs must produce distinct tokens.
+	require.NotEqual(t, token, getRuleGroupNextToken("/path/to/file", "other"))
+	require.NotEqual(t, token, getRuleGroupNextToken("/other/file", "group"))
 }
