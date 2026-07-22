@@ -561,7 +561,7 @@ func (ev *evaluator) evalLMOverTime(ctx context.Context, e *parser.Call) (parser
 // slope per matched pair, matching regression_over_time's default output.
 func (ev *evaluator) lmBivariate(
 	ctx context.Context, _ *parser.Call,
-	_, selY *parser.MatrixSelector,
+	_, _ *parser.MatrixSelector,
 	vsX, vsY *parser.VectorSelector,
 	respBySig map[uint64]int,
 	rangeX, rangeY, offsetX, offsetY int64,
