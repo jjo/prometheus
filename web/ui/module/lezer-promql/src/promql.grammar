@@ -164,6 +164,7 @@ FunctionIdentifier {
   Deg |
   Delta |
   Deriv |
+  EwmaOverTime |
   Exp |
   FirstOverTime |
   Floor |
@@ -460,6 +461,7 @@ durationPrimary[@inline] {
   Deg { condFn<"deg"> }
   Delta { condFn<"delta"> }
   Deriv { condFn<"deriv"> }
+  EwmaOverTime { condFn<"ewma_over_time"> }
   Exp { condFn<"exp"> }
   FirstOverTime {condFn<"first_over_time">}
   Floor { condFn<"floor"> }
