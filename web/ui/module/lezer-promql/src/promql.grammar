@@ -153,6 +153,7 @@ FunctionIdentifier {
   Clamp |
   ClampMax |
   ClampMin |
+  CorrelationOverTime |
   Cos |
   Cosh |
   CountOverTime |
@@ -446,6 +447,7 @@ durationPrimary[@inline] {
   Clamp { condFn<"clamp"> }
   ClampMax { condFn<"clamp_max"> }
   ClampMin { condFn<"clamp_min"> }
+  CorrelationOverTime { condFn<"correlation_over_time"> }
   Cos { condFn<"cos">}
   Cosh { condFn<"cosh">}
   CountOverTime { condFn<"count_over_time"> }
