@@ -228,6 +228,7 @@ FunctionIdentifier {
   Tan |
   Tanh |
   TimeToThreshold |
+  TimeseriesGen |
   Timestamp |
   Time |
   Vector |
@@ -527,6 +528,7 @@ durationPrimary[@inline] {
   Tanh { condFn<"tanh">}
   Time { condFn<"time"> }
   TimeToThreshold { condFn<"time_to_threshold"> }
+  TimeseriesGen { condFn<"timeseries_gen"> }
   Timestamp { condFn<"timestamp"> }
   Vector { condFn<"vector"> }
   Year { condFn<"year"> }

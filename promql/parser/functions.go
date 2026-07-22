@@ -525,6 +525,13 @@ var Functions = map[string]*Function{
 		ReturnType:   ValueTypeVector,
 		Experimental: true,
 	},
+	"timeseries_gen": {
+		Name:         "timeseries_gen",
+		ArgTypes:     []ValueType{ValueTypeString, ValueTypeString},
+		Variadic:     1,
+		ReturnType:   ValueTypeVector,
+		Experimental: true,
+	},
 	"time": {
 		Name:       "time",
 		ArgTypes:   []ValueType{},
