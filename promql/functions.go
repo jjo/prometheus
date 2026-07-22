@@ -2697,6 +2697,7 @@ var FunctionCalls = map[string]FunctionCall{
 	"hour":                         funcHour,
 	"idelta":                       funcIdelta,
 	"increase":                     funcIncrease,
+	"correlation_over_time":        nil, // evalCorrelationOverTime not called via this map.
 	"info":                         nil,
 	"irate":                        funcIrate,
 	"max_of":                       funcMaxOf,
