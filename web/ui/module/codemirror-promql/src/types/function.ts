@@ -89,6 +89,7 @@ import {
   SortByLabelDesc,
   Sqrt,
   StartFn,
+  StartTimestamp,
   Step,
   StddevOverTime,
   StdvarOverTime,
@@ -96,6 +97,7 @@ import {
   Tan,
   Tanh,
   Time,
+  TimeseriesGen,
   Timestamp,
   Vector,
   Year,
@@ -581,6 +583,12 @@ const promqlFunctions: { [key: number]: PromQLFunction } = {
     variadic: 0,
     returnType: ValueType.scalar,
   },
+  [StartTimestamp]: {
+    name: 'start_timestamp',
+    argTypes: [ValueType.vector],
+    variadic: 0,
+    returnType: ValueType.vector,
+  },
   [Step]: {
     name: 'step',
     argTypes: [],
@@ -622,6 +630,12 @@ const promqlFunctions: { [key: number]: PromQLFunction } = {
     argTypes: [],
     variadic: 0,
     returnType: ValueType.scalar,
+  },
+  [TimeseriesGen]: {
+    name: 'timeseries_gen',
+    argTypes: [ValueType.string, ValueType.string],
+    variadic: 1,
+    returnType: ValueType.vector,
   },
   [Timestamp]: {
     name: 'timestamp',

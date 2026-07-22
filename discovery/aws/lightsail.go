@@ -103,6 +103,7 @@ func (c *LightsailSDConfig) SetDirectory(dir string) {
 }
 
 // UnmarshalYAML implements the yaml.Unmarshaler interface for the Lightsail Config.
+// Region resolution is deferred to lightsailClient; see loadRegion.
 func (c *LightsailSDConfig) UnmarshalYAML(unmarshal func(any) error) error {
 	*c = DefaultLightsailSDConfig
 	type plain LightsailSDConfig
@@ -111,12 +112,24 @@ func (c *LightsailSDConfig) UnmarshalYAML(unmarshal func(any) error) error {
 		return err
 	}
 
-	c.Region, err = loadRegion(context.Background(), c.Region)
-	if err != nil {
-		return fmt.Errorf("could not determine AWS region: %w", err)
-	}
-
 	return c.HTTPClientConfig.Validate()
+}
+
+// lightsailClientAdapter captures only the Lightsail API calls AWS discovery
+// uses as method-value closures, keeping the concrete *lightsail.Client out of
+// any interface-boxed struct field. See ec2ClientAdapter for the full
+// rationale: this stops the linker from retaining the entire Lightsail API
+// surface (~3.4 MB).
+type lightsailClientAdapter struct {
+	getInstances func(ctx context.Context, params *lightsail.GetInstancesInput, optFns ...func(*lightsail.Options)) (*lightsail.GetInstancesOutput, error)
+}
+
+func newLightsailClientAdapter(c *lightsail.Client) *lightsailClientAdapter {
+	return &lightsailClientAdapter{getInstances: c.GetInstances}
+}
+
+func (a *lightsailClientAdapter) GetInstances(ctx context.Context, params *lightsail.GetInstancesInput, optFns ...func(*lightsail.Options)) (*lightsail.GetInstancesOutput, error) {
+	return a.getInstances(ctx, params, optFns...)
 }
 
 // LightsailDiscovery periodically performs Lightsail-SD requests. It implements
@@ -124,7 +137,12 @@ func (c *LightsailSDConfig) UnmarshalYAML(unmarshal func(any) error) error {
 type LightsailDiscovery struct {
 	*refresh.Discovery
 	cfg       *LightsailSDConfig
-	lightsail *lightsail.Client
+	lightsail *lightsailClientAdapter
+
+	// region is the resolved region used for the AWS client and for the
+	// Source / __meta_lightsail_region labels. Lazily populated by
+	// lightsailClient.
+	region string
 }
 
 // NewLightsailDiscovery returns a new LightsailDiscovery which periodically refreshes its targets.
@@ -154,7 +172,7 @@ func NewLightsailDiscovery(conf *LightsailSDConfig, opts discovery.DiscovererOpt
 	return d, nil
 }
 
-func (d *LightsailDiscovery) lightsailClient(ctx context.Context) (*lightsail.Client, error) {
+func (d *LightsailDiscovery) lightsailClient(ctx context.Context) (*lightsailClientAdapter, error) {
 	if d.lightsail != nil {
 		return d.lightsail, nil
 	}
@@ -165,9 +183,15 @@ func (d *LightsailDiscovery) lightsailClient(ctx context.Context) (*lightsail.Cl
 		return nil, err
 	}
 
-	// Build the AWS config with the provided region.
+	// Resolve the region lazily. See LightsailSDConfig.UnmarshalYAML.
+	d.region, err = loadRegion(ctx, d.cfg.Region)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build the AWS config with the resolved region.
 	configOptions := []func(*awsConfig.LoadOptions) error{
-		awsConfig.WithRegion(d.cfg.Region),
+		awsConfig.WithRegion(d.region),
 		awsConfig.WithHTTPClient(httpClient),
 	}
 
@@ -198,12 +222,12 @@ func (d *LightsailDiscovery) lightsailClient(ctx context.Context) (*lightsail.Cl
 		cfg.Credentials = aws.NewCredentialsCache(assumeProvider)
 	}
 
-	d.lightsail = lightsail.NewFromConfig(cfg, func(options *lightsail.Options) {
+	d.lightsail = newLightsailClientAdapter(lightsail.NewFromConfig(cfg, func(options *lightsail.Options) {
 		if d.cfg.Endpoint != "" {
 			options.BaseEndpoint = &d.cfg.Endpoint
 		}
 		options.HTTPClient = httpClient
-	})
+	}))
 
 	return d.lightsail, nil
 }
@@ -215,7 +239,7 @@ func (d *LightsailDiscovery) refresh(ctx context.Context) ([]*targetgroup.Group,
 	}
 
 	tg := &targetgroup.Group{
-		Source: d.cfg.Region,
+		Source: d.region,
 	}
 
 	input := &lightsail.GetInstancesInput{}
@@ -242,7 +266,7 @@ func (d *LightsailDiscovery) refresh(ctx context.Context) ([]*targetgroup.Group,
 			lightsailLabelInstanceState:       model.LabelValue(*inst.State.Name),
 			lightsailLabelInstanceSupportCode: model.LabelValue(*inst.SupportCode),
 			lightsailLabelPrivateIP:           model.LabelValue(*inst.PrivateIpAddress),
-			lightsailLabelRegion:              model.LabelValue(d.cfg.Region),
+			lightsailLabelRegion:              model.LabelValue(d.region),
 		}
 
 		addr := net.JoinHostPort(*inst.PrivateIpAddress, strconv.Itoa(d.cfg.Port))
