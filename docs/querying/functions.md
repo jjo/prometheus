@@ -250,38 +250,6 @@ samples are ignored entirely. For elements that contain a mix of float and
 histogram samples, only the float samples are used as input, which is flagged
 by an info-level annotation.
 
-## `ewma_over_time()`
-
-**This function has to be enabled via the [feature
-flag](../feature_flags.md#experimental-promql-functions)
-`--enable-feature=promql-experimental-functions`.**
-
-`ewma_over_time(v range-vector, alpha scalar)` returns the
-exponentially-weighted moving average of the float samples in the range vector
-for a smoothing factor `alpha` in `(0, 1]`:
-
-```
-s[i] = alpha * x[i] + (1 - alpha) * s[i-1], with s[0] = x[0]
-```
-
-Higher `alpha` tracks the most recent samples more responsively; lower `alpha`
-applies heavier smoothing of older history. Compared to `avg_over_time`, EWMA
-weights recent observations more, so it can track gradual drifts while damping
-per-scrape noise.
-
-Returns `NaN` per series for an out-of-range or `NaN` `alpha`, with a
-warning-level annotation. Histogram samples are skipped. Ranges containing only
-histogram samples are silently removed from the output, while ranges containing
-a mix of float and histogram samples use only the float samples and emit an
-info-level annotation.
-
-For example, to alert on sustained request-latency drift while dampening
-per-scrape noise:
-
-```
-ewma_over_time(http_request_duration_seconds[30m], 0.2) > 0.5
-```
-
 ## `exp()`
 
 `exp(v instant-vector)` calculates the exponential function for all float
@@ -702,28 +670,6 @@ At the current stage, this is an experiment to find out how useful the approach
 turns out to be in practice. A final version of the `info` function will indeed
 consider all matching info series and with their appropriate identifying labels.
 
-## `integral()`
-
-**This function has to be enabled via the [feature
-flag](../feature_flags.md#experimental-promql-functions)
-`--enable-feature=promql-experimental-functions`.**
-
-`integral(v range-vector, strategy=2 scalar)` calculates the integral of the
-time series over time in seconds. The optional `strategy` controls which
-quadrature rule is used for each interval: `0` for the left-point rectangle
-rule, `1` for the right-point rectangle rule, and `2` for the trapezoidal rule
-using the average of the adjacent samples. The default is `2`.
-
-`integral` should only be used with gauges, most likely representing a rate in
-units per second.
-
-For example, to calculate the total nodes cost accumulated the last 7 days,
-given its hourly cost:
-
-```
-integral(hourly_cost{job="nodes"}[7d]) / 3600
-```
-
 ## `irate()`
 
 `irate(v range-vector)` calculates the per-second instant rate of increase of
@@ -817,6 +763,10 @@ become the design-matrix columns. The response series is matched to a group by
 those same grouping labels. Each emitted series carries the group's labels with
 `labelName` set to the predictor's value — or to the reserved value
 `(intercept)` for the intercept term — and its value is the fitted coefficient.
+Each group also emits a `(r2)` series carrying the coefficient of determination
+(the fraction of the response variance explained), so a meaningful fit can be
+told apart from a spurious one that the coefficients alone would hide; it is
+`NaN` when the fit is undefined.
 
 When `labelName` is empty, the function degenerates to the bivariate case and
 returns the regression slope per matched pair, matching `regression_over_time`
@@ -1027,57 +977,6 @@ reset. A counter histogram sample followed by a gauge histogram sample, or vice
 versa, also counts as a reset (but note that `resets` should not be used on
 gauges in the first place, see above).
 
-## `robust_zscore()`
-
-**This function has to be enabled via the [feature
-flag](../feature_flags.md#experimental-promql-functions)
-`--enable-feature=promql-experimental-functions`.**
-
-`robust_zscore(v instant-vector)` returns the *robust* z-score (also known in
-the literature as the *modified z-score*) of each float sample in the instant
-vector relative to the median and median absolute deviation (MAD) of the
-float samples across the vector at the same evaluation timestamp:
-
-```
-(v - median(v)) / (1.4826 * MAD(v))
-```
-
-where `MAD(v) = median(|v - median(v)|)`. The `1.4826` factor makes MAD a
-consistent estimator of the standard deviation under a normal distribution
-(see [Rousseeuw & Croux,
-1993](https://doi.org/10.1080/01621459.1993.10476408) and [Leys et al.,
-2013](https://doi.org/10.1016/j.jesp.2013.03.013)).
-
-Compared to `zscore`, this estimator tolerates a few extreme outliers in the
-cohort without being pulled by them, which makes it well-suited for fleet-
-level anomaly detection. Returns `NaN` for every sample when MAD is `0`
-(constant vector, single sample, or a vector where a majority of values are
-equal — a known robustness/limit tradeoff of MAD). Native histogram samples
-are skipped; if any are present alongside floats, an info-level annotation
-is emitted.
-
-## `robust_zscore_over_time()`
-
-**This function has to be enabled via the [feature
-flag](../feature_flags.md#experimental-promql-functions)
-`--enable-feature=promql-experimental-functions`.**
-
-`robust_zscore_over_time(v range-vector)` returns the *robust* z-score (also
-known in the literature as the *modified z-score*) of the most recent sample
-in the range relative to the median and median absolute deviation (MAD) of
-all float samples in the range:
-
-```
-(last - median) / (1.4826 * MAD)
-```
-
-The constant and rationale are the same as for [`robust_zscore()`](#robust_zscore).
-This function is the outlier-resistant counterpart of
-[`zscore_over_time()`](#zscore_over_time): a single extreme value in the
-window does not skew the baseline. Returns `NaN` when MAD is `0`. Native
-histogram samples are skipped; if any are present alongside floats, an
-info-level annotation is emitted.
-
 ## `round()`
 
 `round(v instant-vector, to_nearest=1 scalar)` rounds the sample values of all
@@ -1175,123 +1074,11 @@ queries, this returns `0`.
 this does not actually return the current time, but the time at which the
 expression is to be evaluated.
 
-## `time_to_threshold()`
-
-**This function has to be enabled via the [feature
-flag](../feature_flags.md#experimental-promql-functions)
-`--enable-feature=promql-experimental-functions`.**
-
-`time_to_threshold(v range-vector, threshold scalar)` returns the number of
-seconds, relative to the current evaluation time, at which a linear-regression
-extrapolation of the range vector would reach `threshold`. It is the inverse of
-`predict_linear`: instead of answering "what value at time now+t", it answers
-"at what t does the value cross T".
-
-Positive results are in the future. Negative results mean the threshold has
-already been crossed under the same extrapolation. Returns `NaN` when the
-regression slope is zero because the fitted line never crosses the threshold.
-Very small non-zero slopes can return very large ETAs, matching the linear
-model.
-
-The function should only be used with gauges and only works for float samples.
-Elements in the range vector that contain only histogram samples are ignored
-entirely. For elements that contain a mix of float and histogram samples, only
-the float samples are used as input, which is flagged by an info-level
-annotation.
-
-For example, to flag disks predicted to fill within the next 24 hours:
-
-```
-time_to_threshold(node_filesystem_avail_bytes[1h], 0) < 86400
-```
-
 ## `timestamp()`
 
 `timestamp(v instant-vector)` returns the timestamp of each of the samples of
 the given vector as the number of seconds since January 1, 1970 UTC. It acts on
 float and histogram samples in the same way.
-
-## `timeseries_gen()`
-
-**This function has to be enabled via the [feature
-flag](../feature_flags.md#experimental-promql-functions)
-`--enable-feature=promql-experimental-functions`.**
-
-`timeseries_gen(tpl string, metric_name ...string)` emits a synthetic
-instant vector built from a Go [`text/template`][gotpl] supplied as `tpl`.
-Its primary use case is providing inline "filter" series for `*` / `on(...)`
-joins without precomputing them via recording rules or storage:
-
-```
-metric * on(env) timeseries_gen(`{{rangeSeries "env" "prod,stage,canary" 1.0}}`)
-```
-
-The optional `metric_name` argument controls the `__name__` label on
-emitted series:
-
-- If omitted (or empty), emitted series have no `__name__` label. This is
-  the usual case for join-filter usage where vector matching ignores
-  `__name__` anyway.
-- If provided and non-empty, every emitted series gets
-  `__name__=<metric_name>`.
-
-The template runs **once per query** and the result is cached, so range queries
-do not re-execute the template at every step. Output cardinality is capped at
-10000 series; exceeding the cap aborts the query.
-
-### Template helpers
-
-Labels are supplied as flat `key, value, key, value, ...` variadic pairs — no
-embedded label-string grammar, no escape hell.
-
-| Helper | Signature | Effect |
-| --- | --- | --- |
-| `series` | `series(value float, kvPairs ...string)` | Emit one sample. Pairs must be even length. |
-| `rangeSeries` | `rangeSeries(fanoutLabel string, csv string, value float, kvPairs ...string)` | Emit one sample per comma-separated value of `csv`, with `fanoutLabel` set to that value and any extra `kvPairs` attached to every emitted sample. Empty entries in `csv` are skipped. |
-| `seq` | `seq(start, end int)` | Inclusive integer range. |
-| `split` | `split(s, sep string) []string` | Same as Go's `strings.Split`. |
-| `lower` / `upper` | `lower(s) string` / `upper(s) string` | Case conversion. |
-| `replace` | `replace(s, old, new string) string` | Same as Go's `strings.ReplaceAll`. |
-| `trim` | `trim(s string) string` | Same as Go's `strings.TrimSpace`. |
-| `add` / `sub` / `mul` / `div` / `mod` | `(a, b numeric) float` | Binary math; operands accept any integer or float type. `div` and `mod` reject a zero divisor. |
-| `int` | `(v numeric) int` | Truncate toward zero. Useful for feeding `printf "%d"` because the binary math helpers always return float64. |
-| `abs` / `floor` / `ceil` / `round` | `(v numeric) float` | `math.Abs` / `math.Floor` / `math.Ceil` / `math.Round`. |
-| `min` / `max` | `(a, b numeric) float` | `math.Min` / `math.Max`. |
-| `printf` | (built-in) | Standard Go template `printf`. |
-
-Examples:
-
-```
-# One sample, two labels, with an explicit metric name.
-timeseries_gen(`{{series 1.0 "env" "prod" "job" "api"}}`, "f")
-
-# Fan-out across env values plus a fixed job label (no __name__).
-timeseries_gen(`{{rangeSeries "env" "prod,stage,dev" 1.0 "job" "api"}}`)
-
-# Indexed series via seq + printf.
-timeseries_gen(`{{range $i := seq 1 5}}{{series 1.0 "i" (printf "%d" $i)}}{{end}}`)
-```
-
-### Restrictions
-
-- The `{{define}}` and `{{template}}` template actions are rejected at parse
-  time to prevent recursive expansion.
-- When the `metric_name` argument is provided, the template MUST NOT set
-  `__name__` (via `kvPairs` or as a `rangeSeries` `fanoutLabel`) — the
-  function argument is the single source of truth.
-- When `metric_name` is omitted, the template MAY set `__name__` on a
-  per-series basis via `kvPairs`, or fan out over multiple metric names
-  via `rangeSeries "__name__" "a,b,c" ...`. This lets a single call emit
-  several related metrics.
-- Each call must produce a unique label set; duplicates are a hard error.
-- `seq` ranges are capped at 10000 items; exceeding the cap aborts the query.
-- Label names are validated under Prometheus' UTF-8 label-name scheme,
-  so dotted OpenTelemetry-style names such as `http.method`,
-  `service.name`, and `deployment.environment` are accepted alongside
-  the legacy `[a-zA-Z_][a-zA-Z0-9_]*` form. Dotted names must be quoted
-  in PromQL selectors, e.g. `{"http.method"="GET"}`.
-
-[gotpl]: https://pkg.go.dev/text/template
 
 ## `vector()`
 
@@ -1302,62 +1089,6 @@ a single-element instant vector with no labels.
 
 `year(v=vector(time()) instant-vector)` returns the year for each of the given
 times in UTC. Histogram samples in the input vector are ignored silently.
-
-## `zscore()`
-
-**This function has to be enabled via the [feature
-flag](../feature_flags.md#experimental-promql-functions)
-`--enable-feature=promql-experimental-functions`.**
-
-`zscore(v instant-vector)` returns the z-score of each float sample in the
-instant vector relative to the mean and standard deviation of the float
-samples across the vector at the same evaluation timestamp:
-
-```
-(v - avg(v)) / stddev(v)
-```
-
-This is useful for cross-series anomaly detection at a single instant: values
-near `0` mean the series is close to the cohort's typical value, while
-magnitudes greater than roughly `2`-`3` indicate series that deviate from
-their peers. Returns `NaN` for every sample when the standard deviation is
-`0` (constant vector or single sample). Native histogram samples are skipped;
-if any are present alongside floats, an info-level annotation is emitted.
-
-For example, to flag instances whose current request latency deviates by more
-than three standard deviations from the rest of the fleet:
-
-```
-abs(zscore(http_request_duration_seconds)) > 3
-```
-
-## `zscore_over_time()`
-
-**This function has to be enabled via the [feature
-flag](../feature_flags.md#experimental-promql-functions)
-`--enable-feature=promql-experimental-functions`.**
-
-`zscore_over_time(v range-vector)` returns the z-score of the most recent
-sample in the range relative to the mean and standard deviation of all float
-samples in the range:
-
-```
-(ts - avg_over_time(ts[range])) / stddev_over_time(ts[range])
-```
-
-This is useful for anomaly detection: values near `0` mean the latest sample is
-close to the recent window's typical value, while magnitudes greater than
-roughly `2`-`3` indicate the latest sample is an outlier compared to the
-window. Returns `NaN` when the standard deviation is `0` (constant series or
-single sample). Native histogram samples are ignored silently, as with
-`stddev_over_time`.
-
-For example, to flag request latency that is more than three standard
-deviations away from its own behaviour over the past hour:
-
-```
-abs(zscore_over_time(http_request_duration_seconds[1h])) > 3
-```
 
 ## `<aggregation>_over_time()`
 

@@ -3243,6 +3243,7 @@ eval instant at 5m lm_over_time("lm", lm_y{job="test"}[5m], lm_x{job="test"}[5m]
   {job="test", p="a"} 2
   {job="test", p="b"} 3
   {job="test", p="(intercept)"} 1
+  {job="test", p="(r2)"} 1
 
 clear
 
@@ -3268,6 +3269,7 @@ eval instant at 5m lm_over_time("lm", lmc_y{job="test"}[5m], lmc_x{job="test"}[5
   {job="test", p="a"} NaN
   {job="test", p="b"} NaN
   {job="test", p="(intercept)"} NaN
+  {job="test", p="(r2)"} NaN
 
 clear
 

@@ -41,6 +41,13 @@ const (
 // is skipped with a warning.
 const lmInterceptLabelValue = "(intercept)"
 
+// lmR2LabelValue is the reserved pivot-label value for the emitted
+// coefficient-of-determination (r²) series, which reports the fit quality
+// (fraction of the response variance explained) alongside the coefficients.
+// It lets callers tell a meaningful fit from a spurious one, which the
+// coefficients alone cannot.
+const lmR2LabelValue = "(r2)"
+
 // maxLMPredictors caps the number of distinct pivot-label values (design-matrix
 // columns) per group. The per-step solve is O(n·p² + p³), so this is set far
 // below timeseries_gen's series cap to keep worst-case latency bounded.
@@ -153,6 +160,36 @@ func ridgeAugment(design [][]float64, resp []float64, lambda float64) ([][]float
 		augResp = append(augResp, 0)
 	}
 	return aug, augResp
+}
+
+// lmR2 returns the coefficient of determination (r² = 1 − SS_res/SS_tot) of the
+// fit with the given coefficients over the (unaugmented) design rows. It is NaN
+// when there are no rows or the response has zero variance.
+func lmR2(design [][]float64, resp, coeffs []float64) float64 {
+	n := len(resp)
+	if n == 0 {
+		return math.NaN()
+	}
+	var mean float64
+	for _, y := range resp {
+		mean += y
+	}
+	mean /= float64(n)
+	var ssRes, ssTot float64
+	for i := range resp {
+		var pred float64
+		for j := range coeffs {
+			pred += coeffs[j] * design[i][j]
+		}
+		d := resp[i] - pred
+		ssRes += d * d
+		dt := resp[i] - mean
+		ssTot += dt * dt
+	}
+	if ssTot == 0 {
+		return math.NaN()
+	}
+	return 1 - ssRes/ssTot
 }
 
 // lmPredictor is one design-matrix column: the pivot-label value and the index
@@ -336,7 +373,7 @@ func (ev *evaluator) evalLMOverTime(ctx context.Context, e *parser.Call) (parser
 		}
 		reserved := false
 		for _, pr := range g.predictors {
-			if pr.value == lmInterceptLabelValue {
+			if pr.value == lmInterceptLabelValue || pr.value == lmR2LabelValue {
 				reserved = true
 				break
 			}
@@ -365,8 +402,9 @@ func (ev *evaluator) evalLMOverTime(ctx context.Context, e *parser.Call) (parser
 			predIts[j] = it
 		}
 
-		// Output series: one per coefficient (predictors + intercept).
-		coeffSeries := make([]*Series, k+1)
+		// Output series: one per coefficient (predictors + intercept) plus a
+		// trailing r² fit-quality series.
+		coeffSeries := make([]*Series, k+2)
 		lb := labels.NewBuilder(g.metric)
 		for j, pr := range g.predictors {
 			lb.Reset(g.metric)
@@ -376,6 +414,9 @@ func (ev *evaluator) evalLMOverTime(ctx context.Context, e *parser.Call) (parser
 		lb.Reset(g.metric)
 		lb.Set(labelName, lmInterceptLabelValue)
 		coeffSeries[k] = &Series{Metric: lb.Labels(), DropName: true}
+		lb.Reset(g.metric)
+		lb.Set(labelName, lmR2LabelValue)
+		coeffSeries[k+1] = &Series{Metric: lb.Labels(), DropName: true}
 
 		var respFloats []FPoint
 		var respHists []HPoint
@@ -457,10 +498,16 @@ func (ev *evaluator) evalLMOverTime(ctx context.Context, e *parser.Call) (parser
 				}
 			}
 
+			// r² over the actual (unaugmented) rows; NaN when the fit failed.
+			r2 := math.NaN()
+			if solvable {
+				r2 = lmR2(design, resp, coeffs)
+			}
+
 			// Emit: coeffs[0] is the intercept, coeffs[1..k] the predictors in
-			// sorted column order.
-			ev.currentSamples += k + 1
-			ev.samplesStats.IncrementSamplesAtStep(step, int64(k+1))
+			// sorted column order, and a trailing r² fit-quality series.
+			ev.currentSamples += k + 2
+			ev.samplesStats.IncrementSamplesAtStep(step, int64(k+2))
 			if ev.currentSamples > ev.maxSamples {
 				ev.error(ErrTooManySamples(env))
 			}
@@ -474,6 +521,10 @@ func (ev *evaluator) evalLMOverTime(ctx context.Context, e *parser.Call) (parser
 				coeffSeries[k].Floats = getFPointSlice(numSteps)
 			}
 			coeffSeries[k].Floats = append(coeffSeries[k].Floats, FPoint{F: coeffs[0], T: ts})
+			if coeffSeries[k+1].Floats == nil {
+				coeffSeries[k+1].Floats = getFPointSlice(numSteps)
+			}
+			coeffSeries[k+1].Floats = append(coeffSeries[k+1].Floats, FPoint{F: r2, T: ts})
 
 			stepRangeY := min(rangeY, ev.interval)
 			respIt.ReduceDelta(stepRangeY)
