@@ -171,6 +171,7 @@ var (
 	ReservedLMInterceptLabelWarning         = fmt.Errorf("%w: lm_over_time: a predictor label value collides with the reserved \"(intercept)\" value; group skipped", PromQLWarning)
 	TooManyLMPredictorsWarning              = fmt.Errorf("%w: lm_over_time: predictor cardinality exceeds the supported maximum; group skipped", PromQLWarning)
 	RankDeficientLMDesignInfo               = fmt.Errorf("%w: lm_over_time: design matrix is rank deficient (collinear predictors or too few samples); coefficients are NaN", PromQLInfo)
+	DroppedLMPredictorsInfo                 = fmt.Errorf("%w: lm_over_time: dropped rank-deficient predictor(s) from the fit; their coefficients are NaN while the remaining predictors were solved", PromQLInfo)
 	SortInRangeQueryWarning                 = fmt.Errorf("%w: sort is ineffective for range queries since results are always ordered by labels", PromQLWarning)
 
 	PossibleNonCounterInfo                  = fmt.Errorf("%w: metric might not be a counter, name does not end in _total/_sum/_count/_bucket:", PromQLInfo)
@@ -382,6 +383,17 @@ func NewRankDeficientLMDesignInfo(pos posrange.PositionRange) error {
 	return &annoErr{
 		PositionRange: pos,
 		Err:           RankDeficientLMDesignInfo,
+	}
+}
+
+// NewDroppedLMPredictorsInfo is used when lm_over_time drops one or more
+// rank-deficient (collinear or near-constant) predictors from the fit but still
+// solves for the remaining ones. predictors is a human-readable list of the
+// dropped pivot-label values.
+func NewDroppedLMPredictorsInfo(predictors string, pos posrange.PositionRange) error {
+	return &annoErr{
+		PositionRange: pos,
+		Err:           fmt.Errorf("%w: %s", DroppedLMPredictorsInfo, predictors),
 	}
 }
 

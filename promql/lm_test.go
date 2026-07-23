@@ -78,6 +78,70 @@ func TestHouseholderLeastSquares_Underdetermined(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestHouseholderLeastSquaresPivoted_FullRank(t *testing.T) {
+	// Full-rank design: same solution as the strict solver, no drops.
+	x1 := []float64{1, 2, 3, 4, 5}
+	x2 := []float64{1, 0, 2, 1, 3}
+	y := make([]float64, len(x1))
+	for i := range y {
+		y[i] = 1 + 2*x1[i] + 3*x2[i]
+	}
+	coeffs, rank, ok := householderLeastSquaresPivoted(designFor(x1, x2), y)
+	require.True(t, ok)
+	require.Equal(t, 3, rank)
+	require.InDelta(t, 1.0, coeffs[0], 1e-9)
+	require.InDelta(t, 2.0, coeffs[1], 1e-9)
+	require.InDelta(t, 3.0, coeffs[2], 1e-9)
+}
+
+func TestHouseholderLeastSquaresPivoted_DropsCollinear(t *testing.T) {
+	// x2 = 2·x1: rank deficient. Instead of failing, the solver drops one of the
+	// collinear pair (NaN coefficient) and solves the rest, still reproducing y.
+	x1 := []float64{1, 2, 3, 4, 5}
+	x2 := []float64{2, 4, 6, 8, 10}
+	y := []float64{1, 2, 3, 4, 5} // y = x1 = 0.5·x2
+	design := designFor(x1, x2)
+	coeffs, rank, ok := householderLeastSquaresPivoted(design, y)
+	require.True(t, ok)
+	require.Equal(t, 2, rank, "intercept + one predictor")
+	// Exactly one predictor coefficient is dropped (NaN); the intercept stays.
+	require.False(t, math.IsNaN(coeffs[0]), "intercept retained")
+	require.True(t, math.IsNaN(coeffs[1]) != math.IsNaN(coeffs[2]), "exactly one predictor dropped")
+	// The surviving fit reproduces y (dropped columns contribute 0).
+	for i := range y {
+		var pred float64
+		for j := range coeffs {
+			if math.IsNaN(coeffs[j]) {
+				continue
+			}
+			pred += coeffs[j] * design[i][j]
+		}
+		require.InDelta(t, y[i], pred, 1e-9)
+	}
+}
+
+func TestHouseholderLeastSquaresPivoted_DropsConstant(t *testing.T) {
+	// A constant predictor is collinear with the intercept; the solver drops one
+	// of them rather than NaN-ing the whole fit, and still recovers the x1 slope.
+	x1 := []float64{1, 2, 3, 4, 5}
+	xc := []float64{7, 7, 7, 7, 7}
+	y := []float64{3, 5, 7, 9, 11} // y = 1 + 2·x1
+	design := designFor(x1, xc)
+	coeffs, rank, ok := householderLeastSquaresPivoted(design, y)
+	require.True(t, ok)
+	require.Equal(t, 2, rank)
+	for i := range y {
+		var pred float64
+		for j := range coeffs {
+			if math.IsNaN(coeffs[j]) {
+				continue
+			}
+			pred += coeffs[j] * design[i][j]
+		}
+		require.InDelta(t, y[i], pred, 1e-9, "fit reproduces y despite the constant column")
+	}
+}
+
 func TestParseLMMethod(t *testing.T) {
 	cases := []struct {
 		in         string

@@ -203,6 +203,132 @@ func householderLeastSquares(a [][]float64, b []float64) ([]float64, bool) {
 	return x, true
 }
 
+// householderLeastSquaresPivoted solves min ||A·x − b|| like
+// householderLeastSquares but is rank-revealing: instead of failing on a
+// rank-deficient design, it runs column-pivoted Householder QR (Businger–Golub)
+// to find the maximal set of independent columns, solves for their
+// coefficients, and returns NaN for every dependent or (near-)constant column
+// that had to be dropped. A is n×p row-major; b has length n. It returns the
+// length-p coefficient vector (NaN in dropped positions), the numerical rank r
+// (count of solved columns), and ok=false only when r==0 or there are fewer
+// rows than the rank (underdetermined, no honest fit). A and b are copied, not
+// mutated. A dropped column contributes 0 to the fitted model.
+func householderLeastSquaresPivoted(a [][]float64, b []float64) ([]float64, int, bool) {
+	n := len(a)
+	if n == 0 {
+		return nil, 0, false
+	}
+	p := len(a[0])
+	if p == 0 {
+		return nil, 0, false
+	}
+
+	r := make([][]float64, n)
+	for i := range a {
+		r[i] = slices.Clone(a[i])
+	}
+	y := slices.Clone(b)
+	perm := make([]int, p) // perm[k] = original index of the column now at k.
+	for j := range perm {
+		perm[j] = j
+	}
+
+	// subColNorm returns ||r[k:n][j]||, the residual norm used for pivoting.
+	subColNorm := func(k, j int) float64 {
+		var s float64
+		for i := k; i < n; i++ {
+			s += r[i][j] * r[i][j]
+		}
+		return math.Sqrt(s)
+	}
+
+	rank := 0
+	kMax := min(n, p)
+	for k := range kMax {
+		// Pivot: move the largest-residual-norm column into position k.
+		best, bestNorm := k, subColNorm(k, k)
+		for j := k + 1; j < p; j++ {
+			if nj := subColNorm(k, j); nj > bestNorm {
+				best, bestNorm = j, nj
+			}
+		}
+		if bestNorm < qrRankTolerance {
+			break // Remaining columns are all (near-)dependent; rank = k.
+		}
+		if best != k {
+			for i := range r {
+				r[i][k], r[i][best] = r[i][best], r[i][k]
+			}
+			perm[k], perm[best] = perm[best], perm[k]
+		}
+
+		// Householder reflector for the sub-column r[k:n][k].
+		var sigma float64
+		for i := k; i < n; i++ {
+			sigma += r[i][k] * r[i][k]
+		}
+		sigma = math.Sqrt(sigma)
+		if r[k][k] > 0 {
+			sigma = -sigma
+		}
+		r[k][k] -= sigma
+		var vtv float64
+		for i := k; i < n; i++ {
+			vtv += r[i][k] * r[i][k]
+		}
+		if vtv < qrRankTolerance {
+			break
+		}
+		for j := k + 1; j < p; j++ {
+			var s float64
+			for i := k; i < n; i++ {
+				s += r[i][k] * r[i][j]
+			}
+			s = 2 * s / vtv
+			for i := k; i < n; i++ {
+				r[i][j] -= s * r[i][k]
+			}
+		}
+		var s float64
+		for i := k; i < n; i++ {
+			s += r[i][k] * y[i]
+		}
+		s = 2 * s / vtv
+		for i := k; i < n; i++ {
+			y[i] -= s * r[i][k]
+		}
+		r[k][k] = sigma
+		rank++
+	}
+
+	if rank == 0 || n < rank {
+		return nil, rank, false
+	}
+
+	// Back-substitute over the rank×rank upper-triangular block against y[0:rank].
+	solved := make([]float64, rank)
+	for i := rank - 1; i >= 0; i-- {
+		sum := y[i]
+		for j := i + 1; j < rank; j++ {
+			sum -= r[i][j] * solved[j]
+		}
+		if math.Abs(r[i][i]) < qrRankTolerance {
+			return nil, rank, false
+		}
+		solved[i] = sum / r[i][i]
+	}
+
+	// Scatter back to original column order; dropped columns get NaN.
+	coeffs := make([]float64, p)
+	for j := range coeffs {
+		coeffs[j] = math.NaN()
+	}
+	for i := range rank {
+		coeffs[perm[i]] = solved[i]
+	}
+	return coeffs, rank, true
+}
+
 // ridgeAugment appends p-1 penalty rows to the design matrix and zero entries to
 // the response so that householderLeastSquares yields the ridge estimator
 // β = (XᵀX + λI)⁻¹Xᵀy, with the intercept (column 0) left unpenalized. lambda
@@ -240,6 +366,9 @@ func lmR2(design [][]float64, resp, coeffs []float64) float64 {
 	for i := range resp {
 		var pred float64
 		for j := range coeffs {
+			if math.IsNaN(coeffs[j]) {
+				continue // Dropped (rank-deficient) column contributes 0.
+			}
 			pred += coeffs[j] * design[i][j]
 		}
 		d := resp[i] - pred
@@ -282,11 +411,16 @@ type lmPredictor struct {
 // returns the regression slope per matched pair, matching regression_over_time
 // with the default (slope) output.
 //
-// A step yields NaN coefficients when the design is rank deficient (collinear
-// predictors or fewer samples than columns); an info annotation is emitted.
-// Groups whose predictor cardinality exceeds maxLMPredictors, or that include a
-// predictor whose pivot value collides with "(intercept)", are skipped with a
-// warning. Histogram samples are ignored.
+// For the OLS path the solve is rank-revealing (column-pivoted QR): when the
+// design is rank deficient (a collinear or near-constant predictor) it drops
+// only the offending columns — their coefficients are NaN — and still solves
+// for the remaining predictors, emitting an info annotation naming what was
+// dropped, so one degenerate predictor no longer NaNs the whole model. The
+// ridge path is full rank by construction and always solves all columns. A step
+// still yields all-NaN coefficients only when there are fewer samples than
+// columns (nothing left to solve). Groups whose predictor cardinality exceeds
+// maxLMPredictors, or that include a predictor whose pivot value collides with
+// "(intercept)", are skipped with a warning. Histogram samples are ignored.
 func (ev *evaluator) evalLMOverTime(ctx context.Context, e *parser.Call) (parser.Value, annotations.Annotations) {
 	var warnings annotations.Annotations
 
@@ -488,6 +622,7 @@ func (ev *evaluator) evalLMOverTime(ctx context.Context, e *parser.Call) (parser
 		predFloats := make([][]FPoint, k)
 		predHists := make([][]HPoint, k)
 		rankDeficientSeen := false
+		droppedSeen := false
 
 		step := -1
 		for ts := ev.startTimestamp; ts <= ev.endTimestamp; ts += ev.interval {
@@ -550,15 +685,30 @@ func (ev *evaluator) evalLMOverTime(ctx context.Context, e *parser.Call) (parser
 			}
 
 			coeffs := make([]float64, k+1)
+			var droppedCols []int
 			solvable := len(design) >= k+1
-			if solvable {
-				a, b := design, resp
-				if useRidge && lambda > 0 {
-					a, b = ridgeAugment(design, resp, lambda)
-				}
-				sol, ok := householderLeastSquares(a, b)
-				if ok {
+			switch {
+			case !solvable:
+				// Handled below.
+			case useRidge && lambda > 0:
+				// Ridge is full rank by construction (λI), so the strict solver
+				// suffices — no column can be rank deficient.
+				if sol, ok := householderLeastSquares(ridgeAugment(design, resp, lambda)); ok {
 					copy(coeffs, sol)
+				} else {
+					solvable = false
+				}
+			default:
+				// OLS (and ridge with an invalid λ): rank-revealing solve that
+				// drops only the degenerate columns and solves the rest, so one
+				// constant or collinear predictor no longer NaNs the whole model.
+				if sol, _, ok := householderLeastSquaresPivoted(design, resp); ok {
+					copy(coeffs, sol)
+					for j := range sol {
+						if math.IsNaN(sol[j]) {
+							droppedCols = append(droppedCols, j)
+						}
+					}
 				} else {
 					solvable = false
 				}
@@ -571,6 +721,17 @@ func (ev *evaluator) evalLMOverTime(ctx context.Context, e *parser.Call) (parser
 				for i := range coeffs {
 					coeffs[i] = math.NaN()
 				}
+			} else if len(droppedCols) > 0 && !droppedSeen {
+				droppedSeen = true
+				names := make([]string, 0, len(droppedCols))
+				for _, j := range droppedCols {
+					if j == 0 {
+						names = append(names, lmInterceptLabelValue)
+						continue
+					}
+					names = append(names, g.predictors[j-1].value)
+				}
+				warnings.Add(annotations.NewDroppedLMPredictorsInfo(strings.Join(names, ", "), e.Args[2].PositionRange()))
 			}
 
 			// r² over the actual (unaugmented) rows; NaN when the fit failed.

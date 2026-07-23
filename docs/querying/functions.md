@@ -779,13 +779,19 @@ When `labelName` is empty, the function degenerates to the bivariate case and
 returns the regression slope per matched pair, matching `regression_over_time`
 with its default (slope) output.
 
-The fit is solved with a Householder QR decomposition, which is numerically
-stable for the near-collinear predictors common in metrics (for example CPU
-modes). A step returns `NaN` coefficients when the design is rank deficient —
-collinear predictors, or fewer samples than columns — and a PromQL info
-annotation is emitted. Groups whose predictor cardinality exceeds the supported
-maximum, or that contain a predictor whose pivot value collides with
-`(intercept)`, are skipped with a warning. Histogram samples are ignored.
+The `"lm"` fit is solved with a **rank-revealing** column-pivoted Householder QR
+decomposition, which is numerically stable for the near-collinear predictors
+common in metrics (for example CPU modes). When the design is rank deficient —
+a collinear or near-constant predictor, such as a request verb sitting at 0
+req/s — the solver drops only the offending column (its coefficient is `NaN`)
+and still solves for the remaining predictors, emitting a PromQL info annotation
+that names what was dropped. This means one degenerate predictor no longer turns
+the whole model into `NaN`; the good predictors keep their coefficients. A step
+returns all-`NaN` coefficients only when there are fewer samples than columns.
+(The `"ridge"` method is full rank by construction and always solves every
+column.) Groups whose predictor cardinality exceeds the supported maximum, or
+that contain a predictor whose pivot value collides with `(intercept)`, are
+skipped with a warning. Histogram samples are ignored.
 
 For example, to estimate how much each non-idle CPU mode contributes to request
 latency over the past hour:

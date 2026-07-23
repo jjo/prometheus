@@ -3257,8 +3257,10 @@ eval instant at 5m lm_over_time("lm", lm_uni_y{job="test"}[5m], lm_uni_x{job="te
 
 clear
 
-# Collinear predictors (x_b = 2*x_a) make the design rank deficient => NaN
-# coefficients plus an info annotation.
+# Collinear predictors (x_b = 2*x_a) make the design rank deficient. The
+# rank-revealing solver drops the dependent column (x_a, the smaller-norm of the
+# collinear pair) rather than failing the whole fit: x_b is solved (y = 0.5*x_b),
+# the intercept is 0, r²=1, and an info annotation names the dropped predictor.
 load 1m
   lmc_y{job="test"}         1 2 3 4 5
   lmc_x{job="test", p="a"}  1 2 3 4 5
@@ -3267,9 +3269,30 @@ load 1m
 eval instant at 5m lm_over_time("lm", lmc_y{job="test"}[5m], lmc_x{job="test"}[5m], "p")
   expect info
   {job="test", p="a"} NaN
-  {job="test", p="b"} NaN
-  {job="test", p="(intercept)"} NaN
-  {job="test", p="(r2)"} NaN
+  {job="test", p="b"} 0.5
+  {job="test", p="(intercept)"} 0
+  {job="test", p="(r2)"} 1
+
+clear
+
+# Graceful degradation: a redundant predictor (d = 2*a) alongside GOOD predictors
+# (a, b) is dropped, but the good predictors keep their correct coefficients
+# instead of the whole model going NaN. y = 1 + 2*a + 3*b; d=2*a is dropped, its
+# role absorbed by the retained larger-norm column (d, coeff 1), b stays 3,
+# intercept 1, r²=1.
+load 1m
+  lmg_y{job="test"}         6 5 13 12 20
+  lmg_x{job="test", p="a"}  1 2  3  4  5
+  lmg_x{job="test", p="b"}  1 0  2  1  3
+  lmg_x{job="test", p="d"}  2 4  6  8 10
+
+eval instant at 5m lm_over_time("lm", lmg_y{job="test"}[5m], lmg_x{job="test"}[5m], "p")
+  expect info
+  {job="test", p="a"} NaN
+  {job="test", p="b"} 3
+  {job="test", p="d"} 1
+  {job="test", p="(intercept)"} 1
+  {job="test", p="(r2)"} 1
 
 clear
 
