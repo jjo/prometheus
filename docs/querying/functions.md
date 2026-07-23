@@ -757,6 +757,13 @@ label.
 | `"lm"`    | ordinary least squares                                               |
 | `"ridge"` | L2-penalized least squares; requires `lambda > 0` (intercept unpenalized) |
 
+The base method may be followed by the comma-separated flag `,diff` (for
+example `"ridge,diff"`) to fit on the **first differences** (Δ-on-Δ) of `y` and
+`X` instead of their levels. Differencing removes a shared time trend, so the
+coefficients and `(r2)` reflect step-to-step co-movement rather than a common
+drift — use it when both series trend together and a levels fit would report a
+spuriously strong relationship.
+
 Predictor series are grouped by all labels except `__name__` and `labelName`;
 each group is one independent regression, and its distinct `labelName` values
 become the design-matrix columns. The response series is matched to a group by

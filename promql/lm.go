@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strings"
 
 	"github.com/prometheus/common/model"
 
@@ -29,11 +30,71 @@ import (
 	"github.com/prometheus/prometheus/util/annotations"
 )
 
-// lm_over_time method names.
+// lm_over_time method names and flags.
 const (
 	lmMethodOLS   = "lm"
 	lmMethodRidge = "ridge"
+	// lmFlagDiff fits on the first differences (Δ-on-Δ) of the response and
+	// predictors rather than their levels, removing a shared time trend so the
+	// coefficients and r² reflect co-movement instead of a common drift.
+	lmFlagDiff = "diff"
 )
+
+// parseLMMethod splits the method argument into its base method ("lm" or
+// "ridge") and optional comma-separated flags. The only recognised flag is
+// "diff". It returns ok=false for an unknown base method or flag.
+func parseLMMethod(s string) (base string, difference, ok bool) {
+	parts := strings.Split(s, ",")
+	base = parts[0]
+	for _, f := range parts[1:] {
+		if f == lmFlagDiff {
+			difference = true
+			continue
+		}
+		return base, false, false
+	}
+	return base, difference, base == lmMethodOLS || base == lmMethodRidge
+}
+
+// firstDifference replaces the design/response with consecutive first
+// differences (row i minus row i−1), leaving the intercept column (0) at 1 so
+// its coefficient estimates the per-step drift. It assumes rows are in
+// ascending timestamp order and removes a shared trend/level, so the slope
+// reflects co-movement rather than a common time trend. The result has one
+// fewer row; fewer than two input rows yield an empty result.
+func firstDifference(design [][]float64, resp []float64) ([][]float64, []float64) {
+	n := len(design)
+	if n < 2 {
+		return nil, nil
+	}
+	p := len(design[0])
+	dDesign := make([][]float64, n-1)
+	dResp := make([]float64, n-1)
+	for i := 1; i < n; i++ {
+		row := make([]float64, p)
+		row[0] = 1
+		for j := 1; j < p; j++ {
+			row[j] = design[i][j] - design[i-1][j]
+		}
+		dDesign[i-1] = row
+		dResp[i-1] = resp[i] - resp[i-1]
+	}
+	return dDesign, dResp
+}
+
+// firstDifferenceSlice returns the consecutive first differences of v (v[i] −
+// v[i−1]), assuming v is in ascending timestamp order. The result has one fewer
+// element; fewer than two inputs yield nil.
+func firstDifferenceSlice(v []float64) []float64 {
+	if len(v) < 2 {
+		return nil
+	}
+	d := make([]float64, len(v)-1)
+	for i := 1; i < len(v); i++ {
+		d[i-1] = v[i] - v[i-1]
+	}
+	return d
+}
 
 // lmInterceptLabelValue is the reserved value placed on the pivot label of the
 // emitted intercept coefficient series. A predictor whose pivot value equals
@@ -206,7 +267,10 @@ type lmPredictor struct {
 //
 // Signature: lm_over_time(method string, y range-vector, X range-vector,
 // labelName string, lambda=0 scalar). method is "lm" (ordinary least squares)
-// or "ridge" (L2-penalized, requires lambda > 0). Predictor series are grouped
+// or "ridge" (L2-penalized, requires lambda > 0), optionally with the
+// comma-separated ",diff" flag (e.g. "ridge,diff") to fit on first differences
+// (Δ-on-Δ), which removes a shared time trend so the coefficients and r²
+// reflect co-movement rather than common drift. Predictor series are grouped
 // by all labels except __name__ and labelName; each group is one regression,
 // and its distinct labelName values become the design-matrix columns. The
 // response series is matched to a group by those same grouping labels. Each
@@ -226,9 +290,10 @@ type lmPredictor struct {
 func (ev *evaluator) evalLMOverTime(ctx context.Context, e *parser.Call) (parser.Value, annotations.Annotations) {
 	var warnings annotations.Annotations
 
-	method := stringFromArg(e.Args[0])
-	if method != lmMethodOLS && method != lmMethodRidge {
-		warnings.Add(annotations.NewInvalidLMMethodWarning(method, e.Args[0].PositionRange()))
+	methodArg := stringFromArg(e.Args[0])
+	method, difference, ok := parseLMMethod(methodArg)
+	if !ok {
+		warnings.Add(annotations.NewInvalidLMMethodWarning(methodArg, e.Args[0].PositionRange()))
 		return Matrix{}, warnings
 	}
 	labelName := stringFromArg(e.Args[3])
@@ -324,7 +389,7 @@ func (ev *evaluator) evalLMOverTime(ctx context.Context, e *parser.Call) (parser
 	}
 
 	if labelName == "" {
-		return ev.lmBivariate(ctx, e, selX, selY, vsX, vsY, respBySig,
+		return ev.lmBivariate(ctx, e, selX, selY, vsX, vsY, respBySig, difference,
 			rangeX, rangeY, offsetX, offsetY, numSteps, &warnings)
 	}
 
@@ -460,18 +525,28 @@ func (ev *evaluator) evalLMOverTime(ctx context.Context, e *parser.Call) (parser
 				warnings.Add(annotations.NewInvalidRidgeLambdaWarning(lambda, e.Args[0].PositionRange()))
 			}
 
-			// Assemble the design matrix [1, x₁, …, x_k] over complete rows.
-			design := make([][]float64, 0, len(rows))
-			resp := make([]float64, 0, len(rows))
-			for _, ra := range rows {
-				if ra.filled != k {
-					continue
+			// Assemble the design matrix [1, x₁, …, x_k] over complete rows, in
+			// ascending timestamp order so first-differencing (below) is well
+			// defined.
+			rowTimes := make([]int64, 0, len(rows))
+			for t, ra := range rows {
+				if ra.filled == k {
+					rowTimes = append(rowTimes, t)
 				}
+			}
+			slices.Sort(rowTimes)
+			design := make([][]float64, 0, len(rowTimes))
+			resp := make([]float64, 0, len(rowTimes))
+			for _, t := range rowTimes {
+				ra := rows[t]
 				row := make([]float64, k+1)
 				row[0] = 1
 				copy(row[1:], ra.x)
 				design = append(design, row)
 				resp = append(resp, ra.y)
+			}
+			if difference {
+				design, resp = firstDifference(design, resp)
 			}
 
 			coeffs := make([]float64, k+1)
@@ -564,6 +639,7 @@ func (ev *evaluator) lmBivariate(
 	_, _ *parser.MatrixSelector,
 	vsX, vsY *parser.VectorSelector,
 	respBySig map[uint64]int,
+	difference bool,
 	rangeX, rangeY, offsetX, offsetY int64,
 	numSteps int, warnings *annotations.Annotations,
 ) (parser.Value, annotations.Annotations) {
@@ -607,6 +683,9 @@ func (ev *evaluator) lmBivariate(
 			}
 			// y is the response (first arg), x the predictor (second arg).
 			y, x := alignByTimestamp(floatsY, floatsX)
+			if difference {
+				x, y = firstDifferenceSlice(x), firstDifferenceSlice(y)
+			}
 			r := math.NaN()
 			if fit := olsOnSlices(x, y); fit.ok {
 				r = fit.slope

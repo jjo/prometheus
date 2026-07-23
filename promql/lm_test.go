@@ -78,6 +78,59 @@ func TestHouseholderLeastSquares_Underdetermined(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestParseLMMethod(t *testing.T) {
+	cases := []struct {
+		in         string
+		base       string
+		difference bool
+		ok         bool
+	}{
+		{"lm", "lm", false, true},
+		{"ridge", "ridge", false, true},
+		{"lm,diff", "lm", true, true},
+		{"ridge,diff", "ridge", true, true},
+		{"lm,bogus", "lm", false, false},
+		{"nope", "nope", false, false},
+		{"nope,diff", "nope", true, false},
+	}
+	for _, c := range cases {
+		base, difference, ok := parseLMMethod(c.in)
+		require.Equal(t, c.ok, ok, "ok for %q", c.in)
+		require.Equal(t, c.base, base, "base for %q", c.in)
+		if c.ok {
+			require.Equal(t, c.difference, difference, "difference for %q", c.in)
+		}
+	}
+}
+
+func TestFirstDifference_RemovesTrend(t *testing.T) {
+	// y = 100 + 5·t (pure trend) on x = t. On levels the slope is 5; on first
+	// differences both Δy and Δx are constant, so the differenced predictor has
+	// zero variance and the fit becomes rank deficient (no spurious slope).
+	x := []float64{1, 2, 3, 4, 5}
+	design := designFor(x)
+	resp := []float64{105, 110, 115, 120, 125}
+
+	dDesign, dResp := firstDifference(design, resp)
+	require.Len(t, dDesign, len(design)-1)
+	require.Len(t, dResp, len(resp)-1)
+	for _, row := range dDesign {
+		require.Equal(t, 1.0, row[0], "intercept column stays 1")
+		require.InDelta(t, 1.0, row[1], 1e-9, "Δx is constant 1")
+	}
+	for _, d := range dResp {
+		require.InDelta(t, 5.0, d, 1e-9, "Δy is constant 5")
+	}
+	_, ok := householderLeastSquares(dDesign, dResp)
+	require.False(t, ok, "constant Δx column is rank deficient")
+}
+
+func TestFirstDifferenceSlice(t *testing.T) {
+	require.Equal(t, []float64{1, 1, 2}, firstDifferenceSlice([]float64{1, 2, 3, 5}))
+	require.Nil(t, firstDifferenceSlice([]float64{7}))
+	require.Nil(t, firstDifferenceSlice(nil))
+}
+
 func TestRidgeAugment_ShrinksSlope(t *testing.T) {
 	// With a large penalty the slope shrinks toward 0 and the (unpenalized)
 	// intercept tends to the response mean.
