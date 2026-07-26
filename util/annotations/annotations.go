@@ -156,6 +156,22 @@ var (
 	NativeHistogramNotGaugeWarning          = fmt.Errorf("%w: this native histogram metric is not a gauge:", PromQLWarning)
 	MixedExponentialCustomHistogramsWarning = fmt.Errorf("%w: vector contains a mix of histograms with exponential and custom buckets schemas for metric name", PromQLWarning)
 	IncompatibleBucketLayoutInBinOpWarning  = fmt.Errorf("%w: incompatible bucket layout encountered for binary operator", PromQLWarning)
+	InvalidCorrelationMethodWarning         = fmt.Errorf("%w: correlation method must be 0 (Pearson), 1 (Spearman) or 2 (Kendall)", PromQLWarning)
+	AmbiguousCorrelationPairWarning         = fmt.Errorf("%w: correlation_over_time: multiple series in the second range vector match the same label signature; pairing is non-deterministic", PromQLWarning)
+	LargeKendallCorrelationRangeInfo        = fmt.Errorf("%w: correlation_over_time: Kendall correlation is O(n²) and this range has many paired samples", PromQLInfo)
+	InvalidRegressionOutputWarning          = fmt.Errorf("%w: regression_over_time output must be 0 (slope), 1 (intercept), 2 (prediction) or 3 (r2)", PromQLWarning)
+	InvalidRegressionLinkWarning            = fmt.Errorf("%w: regression_over_time link must be 0 (identity) or 1 (log)", PromQLWarning)
+	AmbiguousRegressionPairWarning          = fmt.Errorf("%w: regression_over_time: multiple series in the second range vector match the same label signature; pairing is non-deterministic", PromQLWarning)
+	NonPositiveRegressionLogValueInfo       = fmt.Errorf("%w: regression_over_time: log link dropped samples with non-positive dependent values", PromQLInfo)
+	InvalidLMMethodWarning                  = fmt.Errorf("%w: lm_over_time method must be \"lm\" or \"ridge\"", PromQLWarning)
+	InvalidRidgeLambdaWarning               = fmt.Errorf("%w: lm_over_time: ridge method requires a lambda > 0", PromQLWarning)
+	AmbiguousLMResponseWarning              = fmt.Errorf("%w: lm_over_time: multiple response series match the same predictor group; pairing is non-deterministic", PromQLWarning)
+	ReservedLMInterceptLabelWarning         = fmt.Errorf("%w: lm_over_time: a predictor label value collides with the reserved \"(intercept)\" value; group skipped", PromQLWarning)
+	TooManyLMPredictorsWarning              = fmt.Errorf("%w: lm_over_time: predictor cardinality exceeds the supported maximum; group skipped", PromQLWarning)
+	RankDeficientLMDesignInfo               = fmt.Errorf("%w: lm_over_time: design matrix is rank deficient (collinear predictors or too few samples); coefficients are NaN", PromQLInfo)
+	DroppedLMPredictorsInfo                 = fmt.Errorf("%w: lm_over_time: dropped rank-deficient predictor(s) from the fit; their coefficients are NaN while the remaining predictors were solved", PromQLInfo)
+	InvalidWLSHalflifeWarning               = fmt.Errorf("%w: lm_over_time: the \"wls\" flag requires a half-life scalar > 0; fitting without time-decay weights", PromQLWarning)
+	WLSRequiresPivotWarning                 = fmt.Errorf("%w: lm_over_time: the \"wls\" flag applies only with a pivot label; ignored for the bivariate (empty labelName) case", PromQLWarning)
 	SortInRangeQueryWarning                 = fmt.Errorf("%w: sort is ineffective for range queries since results are always ordered by labels", PromQLWarning)
 
 	PossibleNonCounterInfo                  = fmt.Errorf("%w: metric might not be a counter, name does not end in _total/_sum/_count/_bucket:", PromQLInfo)
@@ -169,6 +185,7 @@ var (
 	NativeHistogramFractionNaNsInfo         = fmt.Errorf("%w: input to histogram_fraction has NaN observations, which are excluded from all fractions", PromQLInfo)
 	HistogramCounterResetCollisionWarning   = fmt.Errorf("%w: conflicting counter resets during histogram", PromQLWarning)
 	MismatchedCustomBucketsHistogramsInfo   = fmt.Errorf("%w: mismatched custom buckets were reconciled during", PromQLInfo)
+	StartTimeOverlapWarning                 = fmt.Errorf("%w: sample has start time that overlaps with previous sample timestamp", PromQLWarning)
 )
 
 // annoError extends the standard error interface to provide additional functionality
@@ -235,6 +252,158 @@ func NewInvalidRatioWarning(q, to float64, pos posrange.PositionRange) error {
 	return &annoErr{
 		PositionRange: pos,
 		Err:           fmt.Errorf("%w, got %g, capping to %g", InvalidRatioWarning, q, to),
+	}
+}
+
+// NewInvalidCorrelationMethodWarning is used when the user specifies an invalid
+// correlation method value for correlation_over_time.
+func NewInvalidCorrelationMethodWarning(method float64, pos posrange.PositionRange) error {
+	return &annoErr{
+		PositionRange: pos,
+		Err:           fmt.Errorf("%w, got %g", InvalidCorrelationMethodWarning, method),
+	}
+}
+
+// NewAmbiguousCorrelationPairWarning is used when more than one series in the
+// second range vector of correlation_over_time matches the same label signature
+// (all labels except __name__) as a series from the first range vector, so the
+// pairing is non-deterministic.
+func NewAmbiguousCorrelationPairWarning(labels string, pos posrange.PositionRange) error {
+	return &annoErr{
+		PositionRange: pos,
+		Err:           fmt.Errorf("%w: %s", AmbiguousCorrelationPairWarning, labels),
+	}
+}
+
+// NewLargeKendallCorrelationRangeInfo is used when correlation_over_time uses
+// Kendall tau-b on a range with many paired samples.
+func NewLargeKendallCorrelationRangeInfo(pairs int, pos posrange.PositionRange) error {
+	return &annoErr{
+		PositionRange: pos,
+		Err:           fmt.Errorf("%w: %d pairs", LargeKendallCorrelationRangeInfo, pairs),
+	}
+}
+
+// NewInvalidRegressionOutputWarning is used when the user specifies an invalid
+// output selector value for regression_over_time.
+func NewInvalidRegressionOutputWarning(output float64, pos posrange.PositionRange) error {
+	return &annoErr{
+		PositionRange: pos,
+		Err:           fmt.Errorf("%w, got %g", InvalidRegressionOutputWarning, output),
+	}
+}
+
+// NewInvalidRegressionLinkWarning is used when the user specifies an invalid
+// link function value for regression_over_time.
+func NewInvalidRegressionLinkWarning(link float64, pos posrange.PositionRange) error {
+	return &annoErr{
+		PositionRange: pos,
+		Err:           fmt.Errorf("%w, got %g", InvalidRegressionLinkWarning, link),
+	}
+}
+
+// NewAmbiguousRegressionPairWarning is used when more than one series in the
+// second range vector of regression_over_time matches the same label signature
+// (all labels except __name__) as a series from the first range vector, so the
+// pairing is non-deterministic.
+func NewAmbiguousRegressionPairWarning(labels string, pos posrange.PositionRange) error {
+	return &annoErr{
+		PositionRange: pos,
+		Err:           fmt.Errorf("%w: %s", AmbiguousRegressionPairWarning, labels),
+	}
+}
+
+// NewNonPositiveRegressionLogValueInfo is used when regression_over_time with a
+// log link encounters dependent-variable samples that are not strictly positive
+// and therefore cannot be log-transformed; those pairs are dropped.
+func NewNonPositiveRegressionLogValueInfo(pos posrange.PositionRange) error {
+	return &annoErr{
+		PositionRange: pos,
+		Err:           NonPositiveRegressionLogValueInfo,
+	}
+}
+
+// NewInvalidLMMethodWarning is used when the user specifies an invalid method
+// for lm_over_time.
+func NewInvalidLMMethodWarning(method string, pos posrange.PositionRange) error {
+	return &annoErr{
+		PositionRange: pos,
+		Err:           fmt.Errorf("%w, got %q", InvalidLMMethodWarning, method),
+	}
+}
+
+// NewInvalidRidgeLambdaWarning is used when lm_over_time is called with method
+// "ridge" but a non-positive lambda.
+func NewInvalidRidgeLambdaWarning(lambda float64, pos posrange.PositionRange) error {
+	return &annoErr{
+		PositionRange: pos,
+		Err:           fmt.Errorf("%w, got %g", InvalidRidgeLambdaWarning, lambda),
+	}
+}
+
+// NewAmbiguousLMResponseWarning is used when more than one response series in
+// lm_over_time's first range vector matches the same predictor group signature.
+func NewAmbiguousLMResponseWarning(labels string, pos posrange.PositionRange) error {
+	return &annoErr{
+		PositionRange: pos,
+		Err:           fmt.Errorf("%w: %s", AmbiguousLMResponseWarning, labels),
+	}
+}
+
+// NewReservedLMInterceptLabelWarning is used when a predictor's pivot label
+// value collides with the reserved "(intercept)" value.
+func NewReservedLMInterceptLabelWarning(labelName string, pos posrange.PositionRange) error {
+	return &annoErr{
+		PositionRange: pos,
+		Err:           fmt.Errorf("%w: %s", ReservedLMInterceptLabelWarning, labelName),
+	}
+}
+
+// NewTooManyLMPredictorsWarning is used when an lm_over_time predictor group has
+// more distinct pivot-label values than the implementation supports.
+func NewTooManyLMPredictorsWarning(count, maxCount int, pos posrange.PositionRange) error {
+	return &annoErr{
+		PositionRange: pos,
+		Err:           fmt.Errorf("%w: %d > %d", TooManyLMPredictorsWarning, count, maxCount),
+	}
+}
+
+// NewRankDeficientLMDesignInfo is used when lm_over_time cannot solve a step
+// because the design matrix is rank deficient.
+func NewRankDeficientLMDesignInfo(pos posrange.PositionRange) error {
+	return &annoErr{
+		PositionRange: pos,
+		Err:           RankDeficientLMDesignInfo,
+	}
+}
+
+// NewDroppedLMPredictorsInfo is used when lm_over_time drops one or more
+// rank-deficient (collinear or near-constant) predictors from the fit but still
+// solves for the remaining ones. predictors is a human-readable list of the
+// dropped pivot-label values.
+func NewDroppedLMPredictorsInfo(predictors string, pos posrange.PositionRange) error {
+	return &annoErr{
+		PositionRange: pos,
+		Err:           fmt.Errorf("%w: %s", DroppedLMPredictorsInfo, predictors),
+	}
+}
+
+// NewInvalidWLSHalflifeWarning is used when the lm_over_time "wls" flag is set
+// but the half-life scalar is missing or not > 0.
+func NewInvalidWLSHalflifeWarning(halflife float64, pos posrange.PositionRange) error {
+	return &annoErr{
+		PositionRange: pos,
+		Err:           fmt.Errorf("%w: got %g", InvalidWLSHalflifeWarning, halflife),
+	}
+}
+
+// NewWLSRequiresPivotWarning is used when the lm_over_time "wls" flag is set on
+// the bivariate (empty labelName) path, where time-decay weighting is not
+// applied.
+func NewWLSRequiresPivotWarning(pos posrange.PositionRange) error {
+	return &annoErr{
+		PositionRange: pos,
+		Err:           WLSRequiresPivotWarning,
 	}
 }
 
@@ -487,5 +656,57 @@ func NewMismatchedCustomBucketsHistogramsInfo(pos posrange.PositionRange, operat
 	return &annoErr{
 		PositionRange: pos,
 		Err:           fmt.Errorf("%w %s", MismatchedCustomBucketsHistogramsInfo, operation.String()),
+	}
+}
+
+type startTimeOverlapErr struct {
+	PositionRange posrange.PositionRange
+	Err           error
+	Query         string
+	metricName    string
+	count         int
+}
+
+func (e *startTimeOverlapErr) Error() string {
+	if e.Query == "" {
+		// Don't include count when query is empty to allow proper deduplication.
+		return fmt.Sprintf("%s for metric %q", e.Err, e.metricName)
+	}
+	if e.count > 1 {
+		return fmt.Sprintf("%s for metric %q (%d occurrences) (%s)", e.Err, e.metricName, e.count, e.PositionRange.StartPosInput(e.Query, 0))
+	}
+	return fmt.Sprintf("%s for metric %q (%s)", e.Err, e.metricName, e.PositionRange.StartPosInput(e.Query, 0))
+}
+
+func (e *startTimeOverlapErr) Unwrap() error {
+	return e.Err
+}
+
+func (e *startTimeOverlapErr) SetQuery(query string) {
+	e.Query = query
+}
+
+func (e *startTimeOverlapErr) Merge(other error) error {
+	var o *startTimeOverlapErr
+	ok := errors.As(other, &o)
+	if !ok {
+		return e
+	}
+	if e.Err.Error() != o.Err.Error() || e.metricName != o.metricName {
+		return e
+	}
+	o.count += e.count
+	return o
+}
+
+// NewStartTimeOverlapWarning is used when a sample's start time overlaps with a
+// previous sample's timestamp, indicating potential data quality issues.
+// This applies to both delta and cumulative counter metrics.
+func NewStartTimeOverlapWarning(metricName string, pos posrange.PositionRange) error {
+	return &startTimeOverlapErr{
+		PositionRange: pos,
+		Err:           StartTimeOverlapWarning,
+		metricName:    metricName,
+		count:         1,
 	}
 }

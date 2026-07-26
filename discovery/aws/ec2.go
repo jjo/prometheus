@@ -80,12 +80,6 @@ func init() {
 	discovery.RegisterConfig(&EC2SDConfig{})
 }
 
-// EC2Filter is the configuration for filtering EC2 instances.
-type EC2Filter struct {
-	Name   string   `yaml:"name"`
-	Values []string `yaml:"values"`
-}
-
 // EC2SDConfig is the configuration for EC2 based service discovery.
 type EC2SDConfig struct {
 	Endpoint        string         `yaml:"endpoint"`
@@ -97,7 +91,7 @@ type EC2SDConfig struct {
 	ExternalID      string         `yaml:"external_id,omitempty"`
 	RefreshInterval model.Duration `yaml:"refresh_interval,omitempty"`
 	Port            int            `yaml:"port"`
-	Filters         []*EC2Filter   `yaml:"filters"`
+	Filters         []*Filter      `yaml:"filters"`
 
 	HTTPClientConfig config.HTTPClientConfig `yaml:",inline"`
 }
@@ -123,18 +117,13 @@ func (c *EC2SDConfig) SetDirectory(dir string) {
 }
 
 // UnmarshalYAML implements the yaml.Unmarshaler interface for the EC2 Config.
+// Region resolution is deferred to ec2Client; see loadRegion.
 func (c *EC2SDConfig) UnmarshalYAML(unmarshal func(any) error) error {
 	*c = DefaultEC2SDConfig
 	type plain EC2SDConfig
 	err := unmarshal((*plain)(c))
 	if err != nil {
 		return err
-	}
-
-	// Check if the region is set, if not attempt to load it from the AWS SDK.
-	c.Region, err = loadRegion(context.Background(), c.Region)
-	if err != nil {
-		return fmt.Errorf("could not determine AWS region: %w", err)
 	}
 
 	for _, f := range c.Filters {
@@ -150,6 +139,47 @@ type ec2Client interface {
 	DescribeInstances(ctx context.Context, params *ec2.DescribeInstancesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error)
 }
 
+// ec2ClientAdapter holds the EC2 API calls that AWS discovery actually uses as
+// method-value closures over the concrete *ec2.Client.
+//
+// It exists purely to keep the binary small. The Go linker, once reflection
+// (reflect.Value.Method/Call plus struct-field traversal, both reachable via
+// the YAML/config machinery) is live, conservatively retains every exported
+// method of any concrete type that is reachable through an interface — and a
+// type stored as a field of an interface-boxed struct counts. *ec2.Client has
+// ~470 operation methods; retaining all of them pulls in ~1,500 serializers and
+// roughly 21 MB. By capturing only the needed methods as func values, the
+// concrete *ec2.Client is hidden inside closure contexts (which reflection
+// cannot traverse) and never appears as a field of a boxed type, so dead-code
+// elimination drops the unused operations.
+type ec2ClientAdapter struct {
+	describeAvailabilityZones func(ctx context.Context, params *ec2.DescribeAvailabilityZonesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeAvailabilityZonesOutput, error)
+	describeInstances         func(ctx context.Context, params *ec2.DescribeInstancesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error)
+	describeNetworkInterfaces func(ctx context.Context, params *ec2.DescribeNetworkInterfacesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeNetworkInterfacesOutput, error)
+}
+
+// newEC2ClientAdapter wraps a concrete *ec2.Client, capturing only the API
+// calls AWS discovery needs. See the ec2ClientAdapter doc comment for why.
+func newEC2ClientAdapter(c *ec2.Client) ec2ClientAdapter {
+	return ec2ClientAdapter{
+		describeAvailabilityZones: c.DescribeAvailabilityZones,
+		describeInstances:         c.DescribeInstances,
+		describeNetworkInterfaces: c.DescribeNetworkInterfaces,
+	}
+}
+
+func (a ec2ClientAdapter) DescribeAvailabilityZones(ctx context.Context, params *ec2.DescribeAvailabilityZonesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeAvailabilityZonesOutput, error) {
+	return a.describeAvailabilityZones(ctx, params, optFns...)
+}
+
+func (a ec2ClientAdapter) DescribeInstances(ctx context.Context, params *ec2.DescribeInstancesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error) {
+	return a.describeInstances(ctx, params, optFns...)
+}
+
+func (a ec2ClientAdapter) DescribeNetworkInterfaces(ctx context.Context, params *ec2.DescribeNetworkInterfacesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeNetworkInterfacesOutput, error) {
+	return a.describeNetworkInterfaces(ctx, params, optFns...)
+}
+
 // EC2Discovery periodically performs EC2-SD requests. It implements
 // the Discoverer interface.
 type EC2Discovery struct {
@@ -157,6 +187,10 @@ type EC2Discovery struct {
 	logger *slog.Logger
 	cfg    *EC2SDConfig
 	ec2    ec2Client
+
+	// region is the resolved region used for the AWS client and for the
+	// Source / __meta_ec2_region labels. Lazily populated by ec2Client.
+	region string
 
 	// azToAZID maps this account's availability zones to their underlying AZ
 	// ID, e.g. eu-west-2a -> euw2-az2. Refreshes are performed sequentially, so
@@ -202,9 +236,15 @@ func (d *EC2Discovery) ec2Client(ctx context.Context) (ec2Client, error) {
 		return nil, err
 	}
 
-	// Build the AWS config with the provided region.
+	// Resolve the region lazily. See EC2SDConfig.UnmarshalYAML.
+	d.region, err = loadRegion(ctx, d.cfg.Region)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build the AWS config with the resolved region.
 	configOptions := []func(*awsConfig.LoadOptions) error{
-		awsConfig.WithRegion(d.cfg.Region),
+		awsConfig.WithRegion(d.region),
 		awsConfig.WithHTTPClient(httpClient),
 	}
 
@@ -235,12 +275,12 @@ func (d *EC2Discovery) ec2Client(ctx context.Context) (ec2Client, error) {
 		cfg.Credentials = aws.NewCredentialsCache(assumeProvider)
 	}
 
-	d.ec2 = ec2.NewFromConfig(cfg, func(options *ec2.Options) {
+	d.ec2 = newEC2ClientAdapter(ec2.NewFromConfig(cfg, func(options *ec2.Options) {
 		if d.cfg.Endpoint != "" {
 			options.BaseEndpoint = &d.cfg.Endpoint
 		}
 		options.HTTPClient = httpClient
-	})
+	}))
 
 	return d.ec2, nil
 }
@@ -271,7 +311,7 @@ func (d *EC2Discovery) refresh(ctx context.Context) ([]*targetgroup.Group, error
 	}
 
 	tg := &targetgroup.Group{
-		Source: d.cfg.Region,
+		Source: d.region,
 	}
 
 	var filters []ec2Types.Filter
@@ -315,7 +355,7 @@ func (d *EC2Discovery) refresh(ctx context.Context) ([]*targetgroup.Group, error
 
 				labels := model.LabelSet{
 					ec2LabelInstanceID: model.LabelValue(*inst.InstanceId),
-					ec2LabelRegion:     model.LabelValue(d.cfg.Region),
+					ec2LabelRegion:     model.LabelValue(d.region),
 				}
 
 				if r.OwnerId != nil {

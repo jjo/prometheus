@@ -103,6 +103,49 @@ vector are ignored silently.
 samples in `v` to have a lower limit of `min`. Histogram samples in the input
 vector are ignored silently.
 
+## `correlation_over_time()`
+
+**This function has to be enabled via the [feature
+flag](../feature_flags.md#experimental-promql-functions)
+`--enable-feature=promql-experimental-functions`.**
+
+`correlation_over_time(a range-vector, b range-vector, method=0 scalar)`
+returns the correlation coefficient between paired float samples of `a` and
+`b` over the given range, per matched series pair. Series across the two
+selectors are paired by exact match on all labels except `__name__`;
+unpaired series are silently dropped. At each evaluation step, only samples
+whose timestamps appear in both range windows are correlated.
+
+The optional `method` scalar selects the coefficient:
+
+| `method` | meaning                              |
+|----------|--------------------------------------|
+| `0`      | Pearson product-moment (default)     |
+| `1`      | Spearman rank, with average-rank ties |
+| `2`      | Kendall tau-b                        |
+
+Pearson and Spearman are computed in a single Kahan-compensated pass.
+Kendall is the naive O(n²) implementation, which is acceptable for the range
+sizes typical of Prometheus queries but can be expensive for very long
+windows.
+
+Returns `NaN` for a step when the paired window has fewer than 2 samples, the
+variance is zero (constant input, single distinct value, or all-tied pairs
+for Kendall), or `method` is outside `{0, 1, 2}` — in the last case a
+PromQL warning annotation is also emitted. Histogram samples are skipped
+and do not contribute to the correlation.
+
+For example, to surface request-error-rate and request-latency series whose
+per-minute behaviour over the past hour moves together (potentially the
+same upstream problem causing both):
+
+```
+correlation_over_time(
+  rate(http_request_errors_total[1m])[1h:1m],
+  histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[1m]))[1h:1m]
+) > 0.8
+```
+
 ## `day_of_month()`
 
 `day_of_month(v=vector(time()) instant-vector)` interprets float samples in
@@ -693,6 +736,85 @@ This second example has the same effect than the first example, and illustrates 
 label_replace(up{job="api-server",service="a:c"}, "foo", "$name", "service", "(?P<name>.*):(?P<version>.*)")
 ```
 
+## `lm_over_time()`
+
+**This function has to be enabled via the [feature
+flag](../feature_flags.md#experimental-promql-functions)
+`--enable-feature=promql-experimental-functions`.**
+
+`lm_over_time(method string, y range-vector, X range-vector, labelName string, lambda=0 scalar, halflife=0 scalar)`
+fits a multiple linear regression of the response series `y` on the predictor
+series `X` at each evaluation step, and returns the fitted coefficients. It is
+the multivariate generalization of
+[`regression_over_time()`](#regression_over_time): `labelName` is the pivot that
+reshapes `X` into a design matrix whose columns are the distinct values of that
+label.
+
+`method` selects the estimator:
+
+| `method`  | meaning                                                              |
+|-----------|----------------------------------------------------------------------|
+| `"lm"`    | ordinary least squares                                               |
+| `"ridge"` | L2-penalized least squares; requires `lambda > 0` (intercept unpenalized) |
+
+The base method may be followed by one or more comma-separated flags, which
+compose (for example `"ridge,diff,wls"`):
+
+* `,diff` — fit on the **first differences** (Δ-on-Δ) of `y` and `X` instead of
+  their levels. Differencing removes a shared time trend, so the coefficients
+  and `(r2)` reflect step-to-step co-movement rather than a common drift — use
+  it when both series trend together and a levels fit would report a spuriously
+  strong relationship.
+* `,wls` — **weighted least squares** with exponential time-decay weights, so
+  recent samples influence the fit more than old ones (a better fit for
+  monitoring, where the current relationship matters most). The decay `halflife`
+  is given as the last scalar argument, in seconds; a sample of age `t` gets
+  weight `0.5^(t/halflife)`. The half-life must be `> 0`, otherwise the fit
+  falls back to unweighted with a warning. `,wls` currently applies only when a
+  `labelName` pivot is given (not the bivariate case). The reported `(r2)` is
+  measured against the unweighted observations.
+
+Predictor series are grouped by all labels except `__name__` and `labelName`;
+each group is one independent regression, and its distinct `labelName` values
+become the design-matrix columns. The response series is matched to a group by
+those same grouping labels. Each emitted series carries the group's labels with
+`labelName` set to the predictor's value — or to the reserved value
+`(intercept)` for the intercept term — and its value is the fitted coefficient.
+Each group also emits a `(r2)` series carrying the coefficient of determination
+(the fraction of the response variance explained), so a meaningful fit can be
+told apart from a spurious one that the coefficients alone would hide; it is
+`NaN` when the fit is undefined.
+
+When `labelName` is empty, the function degenerates to the bivariate case and
+returns the regression slope per matched pair, matching `regression_over_time`
+with its default (slope) output.
+
+The `"lm"` fit is solved with a **rank-revealing** column-pivoted Householder QR
+decomposition, which is numerically stable for the near-collinear predictors
+common in metrics (for example CPU modes). When the design is rank deficient —
+a collinear or near-constant predictor, such as a request verb sitting at 0
+req/s — the solver drops only the offending column (its coefficient is `NaN`)
+and still solves for the remaining predictors, emitting a PromQL info annotation
+that names what was dropped. This means one degenerate predictor no longer turns
+the whole model into `NaN`; the good predictors keep their coefficients. A step
+returns all-`NaN` coefficients only when there are fewer samples than columns.
+(The `"ridge"` method is full rank by construction and always solves every
+column.) Groups whose predictor cardinality exceeds the supported maximum, or
+that contain a predictor whose pivot value collides with `(intercept)`, are
+skipped with a warning. Histogram samples are ignored.
+
+For example, to estimate how much each non-idle CPU mode contributes to request
+latency over the past hour:
+
+```
+lm_over_time(
+  "lm",
+  request_latency_p99[1h:1m],
+  rate(node_cpu_seconds_total{mode!="idle"}[1m])[1h:1m],
+  "mode"
+)
+```
+
 ## `max_of()`
 
 **This function has to be enabled via the [feature
@@ -802,6 +924,64 @@ or a function aggregating over time (any function ending in `_over_time`),
 always take a `rate()` first, then aggregate. Otherwise `rate()` cannot detect
 counter resets when your target restarts.
 
+## `regression_over_time()`
+
+**This function has to be enabled via the [feature
+flag](../feature_flags.md#experimental-promql-functions)
+`--enable-feature=promql-experimental-functions`.**
+
+`regression_over_time(y range-vector, x range-vector, output=0 scalar, link=0 scalar)`
+fits a least-squares regression of the dependent series `y` on the independent
+series `x` over the given range, per matched series pair, and returns the
+selected scalar. Series across the two selectors are paired by exact match on
+all labels except `__name__`; unpaired series are silently dropped. At each
+evaluation step, only samples whose timestamps appear in both range windows are
+used.
+
+This generalises [`correlation_over_time()`](#correlation_over_time): where
+correlation returns the unitless association coefficient `r`, regression returns
+the predictive line itself (`slope = r · σy/σx`) and, optionally, a forecast.
+It is the closed-form, Gaussian-family special case of a count time-series GLM
+(see the [`tscount` package](https://cran.r-project.org/package=tscount)); the
+iterative maximum-likelihood fit of the full GLM is intentionally not
+implemented.
+
+The optional `output` scalar selects what is returned:
+
+| `output` | meaning                                                  |
+|----------|----------------------------------------------------------|
+| `0`      | slope `β₁` (default)                                     |
+| `1`      | intercept `β₀`                                           |
+| `2`      | prediction `ŷ` at the most recent `x` in the window     |
+| `3`      | coefficient of determination `r²`                       |
+
+The optional `link` scalar selects the link function:
+
+| `link` | meaning                                                              |
+|--------|----------------------------------------------------------------------|
+| `0`    | identity (default): fits `y ≈ β₀ + β₁·x`                             |
+| `1`    | log: fits `ln(y) ≈ β₀ + β₁·x`, i.e. `y ≈ exp(β₀)·exp(β₁·x)`          |
+
+The log link suits non-negative, count-like series. Its slope, intercept and
+`r²` are reported on the natural-log scale, while the prediction is
+back-transformed with `exp`. Samples with non-positive `y` cannot be
+log-transformed and are dropped, with a PromQL info annotation.
+
+Returns `NaN` for a step when the paired window has fewer than 2 samples, when
+`x` has zero variance, or when `output`/`link` is out of range — in the last
+case a PromQL warning annotation is also emitted. Histogram samples are skipped
+and do not contribute.
+
+For example, to estimate how much CPU each unit of request rate costs, fitted
+over the past hour:
+
+```
+regression_over_time(
+  rate(process_cpu_seconds_total[1m])[1h:1m],
+  rate(http_requests_total[1m])[1h:1m]
+)
+```
+
 ## `resets()`
 
 For each input time series, `resets(v range-vector)` returns the number of
@@ -894,6 +1074,14 @@ flag](../feature_flags.md#experimental-promql-functions)
 number of seconds since January 1, 1970 UTC. For instant queries, this is equal
 to the evaluation timestamp.
 
+## `start_timestamp()`
+
+`start_timestamp(v instant-vector)` returns the start timestamp of each of the samples of
+the given vector as the number of seconds since January 1, 1970 UTC. It acts on
+float and histogram samples in the same way.
+
+This function only works when used directly on an instant vector and when `use-start-timestamps` feature flag is enabled. Otherwise, if it's used on an expression or if `use-start-timestamps` is disabled, it returns empty results.
+
 ## `step()`
 
 **This function has to be enabled via the [feature
@@ -939,6 +1127,7 @@ over time and return an instant vector with per-series aggregation results:
 * `stddev_over_time(range-vector)`: the population standard deviation of all float samples in the specified interval.
 * `stdvar_over_time(range-vector)`: the population variance of all float samples in the specified interval.
 * `last_over_time(range-vector)`: the most recent sample in the specified interval.
+* `first_over_time(range-vector)`: the oldest sample in the specified interval.
 * `present_over_time(range-vector)`: the value 1 for any series in the specified interval.
 
 If the [feature flag](../feature_flags.md#experimental-promql-functions)
@@ -953,7 +1142,6 @@ additional functions are available:
   that has the maximum value of all float samples in the specified interval.
 * `ts_of_last_over_time(range-vector)`: the timestamp of last sample in the
   specified interval.
-* `first_over_time(range-vector)`: the oldest sample in the specified interval.
 * `ts_of_first_over_time(range-vector)`: the timestamp of earliest sample in the
   specified interval.
 
@@ -979,8 +1167,7 @@ These functions act on histograms in the following way:
 select the first sample of `m` _within_ the 1m range, where `m offset 1m` will
 select the most recent sample within the lookback interval _outside and prior
 to_ the 1m offset. This is particularly useful with `first_over_time(m[step()])`
-in range queries (available when `--enable-feature=promql-duration-expr` is set)
-to ensure that the sample selected is within the range step.
+in range queries to ensure that the sample selected is within the range step.
 
 ## Trigonometric Functions
 

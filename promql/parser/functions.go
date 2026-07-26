@@ -100,10 +100,24 @@ var Functions = map[string]*Function{
 		ArgTypes:   []ValueType{ValueTypeVector, ValueTypeScalar},
 		ReturnType: ValueTypeVector,
 	},
+	"correlation_over_time": {
+		Name:         "correlation_over_time",
+		ArgTypes:     []ValueType{ValueTypeMatrix, ValueTypeMatrix, ValueTypeScalar},
+		Variadic:     1,
+		ReturnType:   ValueTypeVector,
+		Experimental: true,
+	},
 	"cos": {
 		Name:       "cos",
 		ArgTypes:   []ValueType{ValueTypeVector},
 		ReturnType: ValueTypeVector,
+	},
+	"regression_over_time": {
+		Name:         "regression_over_time",
+		ArgTypes:     []ValueType{ValueTypeMatrix, ValueTypeMatrix, ValueTypeScalar},
+		Variadic:     2,
+		ReturnType:   ValueTypeVector,
+		Experimental: true,
 	},
 	"cosh": {
 		Name:       "cosh",
@@ -166,10 +180,9 @@ var Functions = map[string]*Function{
 		ReturnType: ValueTypeVector,
 	},
 	"first_over_time": {
-		Name:         "first_over_time",
-		ArgTypes:     []ValueType{ValueTypeMatrix},
-		ReturnType:   ValueTypeVector,
-		Experimental: true,
+		Name:       "first_over_time",
+		ArgTypes:   []ValueType{ValueTypeMatrix},
+		ReturnType: ValueTypeVector,
 	},
 	"floor": {
 		Name:       "floor",
@@ -273,6 +286,13 @@ var Functions = map[string]*Function{
 		Name:       "last_over_time",
 		ArgTypes:   []ValueType{ValueTypeMatrix},
 		ReturnType: ValueTypeVector,
+	},
+	"lm_over_time": {
+		Name:         "lm_over_time",
+		ArgTypes:     []ValueType{ValueTypeString, ValueTypeMatrix, ValueTypeMatrix, ValueTypeString, ValueTypeScalar},
+		Variadic:     2,
+		ReturnType:   ValueTypeVector,
+		Experimental: true,
 	},
 	"min_of": {
 		Name:         "min_of",
@@ -447,6 +467,12 @@ var Functions = map[string]*Function{
 		Name:         "start",
 		ArgTypes:     []ValueType{},
 		ReturnType:   ValueTypeScalar,
+		Experimental: true,
+	},
+	"start_timestamp": {
+		Name:         "start_timestamp",
+		ArgTypes:     []ValueType{ValueTypeVector},
+		ReturnType:   ValueTypeVector,
 		Experimental: true,
 	},
 	"step": {
