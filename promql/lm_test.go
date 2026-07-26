@@ -142,27 +142,70 @@ func TestHouseholderLeastSquaresPivoted_DropsConstant(t *testing.T) {
 	}
 }
 
+func TestTimeDecayWeightedCopy_Scaling(t *testing.T) {
+	// Two rows one half-life apart: the newest keeps weight 1 (scale 1), the
+	// oldest gets weight 0.5 (scale sqrt(0.5)).
+	design := [][]float64{{1, 10}, {1, 20}}
+	resp := []float64{3, 7}
+	hlMs := 1000.0
+	times := []int64{0, 1000} // oldest at 0 (age = hlMs), newest at 1000 (age 0).
+	wd, wr := timeDecayWeightedCopy(design, resp, times, hlMs)
+	sOld := math.Sqrt(0.5)
+	require.InDelta(t, 1*sOld, wd[0][0], 1e-12)
+	require.InDelta(t, 10*sOld, wd[0][1], 1e-12)
+	require.InDelta(t, 3*sOld, wr[0], 1e-12)
+	require.InDelta(t, 1.0, wd[1][0], 1e-12, "newest row unscaled")
+	require.InDelta(t, 20.0, wd[1][1], 1e-12)
+	require.InDelta(t, 7.0, wr[1], 1e-12)
+	// Originals untouched.
+	require.Equal(t, 1.0, design[0][0])
+	require.Equal(t, 3.0, resp[0])
+}
+
+func TestTimeDecayWeighting_TiltsTowardRecent(t *testing.T) {
+	// y is flat early then rises steeply at the recent end. Recency weighting
+	// should pull the fitted slope up, toward the recent (steeper) trend.
+	x := []float64{0, 1, 2, 3, 4}
+	y := []float64{0, 0, 0, 5, 10}
+	times := []int64{0, 1000, 2000, 3000, 4000}
+	design := designFor(x)
+
+	ols, ok := householderLeastSquares(design, y)
+	require.True(t, ok)
+
+	wd, wr := timeDecayWeightedCopy(design, y, times, 1000) // 1s half-life.
+	wls, ok := householderLeastSquares(wd, wr)
+	require.True(t, ok)
+
+	require.Greater(t, wls[1], ols[1], "recency weighting steepens the slope toward the recent trend")
+}
+
 func TestParseLMMethod(t *testing.T) {
 	cases := []struct {
 		in         string
 		base       string
 		difference bool
+		weighted   bool
 		ok         bool
 	}{
-		{"lm", "lm", false, true},
-		{"ridge", "ridge", false, true},
-		{"lm,diff", "lm", true, true},
-		{"ridge,diff", "ridge", true, true},
-		{"lm,bogus", "lm", false, false},
-		{"nope", "nope", false, false},
-		{"nope,diff", "nope", true, false},
+		{"lm", "lm", false, false, true},
+		{"ridge", "ridge", false, false, true},
+		{"lm,diff", "lm", true, false, true},
+		{"ridge,diff", "ridge", true, false, true},
+		{"lm,wls", "lm", false, true, true},
+		{"ridge,wls", "ridge", false, true, true},
+		{"ridge,diff,wls", "ridge", true, true, true},
+		{"lm,bogus", "lm", false, false, false},
+		{"nope", "nope", false, false, false},
+		{"nope,diff", "nope", false, false, false},
 	}
 	for _, c := range cases {
-		base, difference, ok := parseLMMethod(c.in)
+		base, difference, weighted, ok := parseLMMethod(c.in)
 		require.Equal(t, c.ok, ok, "ok for %q", c.in)
 		require.Equal(t, c.base, base, "base for %q", c.in)
 		if c.ok {
 			require.Equal(t, c.difference, difference, "difference for %q", c.in)
+			require.Equal(t, c.weighted, weighted, "weighted for %q", c.in)
 		}
 	}
 }

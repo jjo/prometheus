@@ -128,7 +128,7 @@ export const functionSignatures: Record<string, Func> = {
   lm_over_time: {
     name: "lm_over_time",
     argTypes: [valueType.string, valueType.matrix, valueType.matrix, valueType.string, valueType.scalar],
-    variadic: 1,
+    variadic: 2,
     returnType: valueType.vector,
   },
   ln: { name: "ln", argTypes: [valueType.vector], variadic: 0, returnType: valueType.vector },

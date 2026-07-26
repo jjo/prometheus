@@ -172,6 +172,8 @@ var (
 	TooManyLMPredictorsWarning              = fmt.Errorf("%w: lm_over_time: predictor cardinality exceeds the supported maximum; group skipped", PromQLWarning)
 	RankDeficientLMDesignInfo               = fmt.Errorf("%w: lm_over_time: design matrix is rank deficient (collinear predictors or too few samples); coefficients are NaN", PromQLInfo)
 	DroppedLMPredictorsInfo                 = fmt.Errorf("%w: lm_over_time: dropped rank-deficient predictor(s) from the fit; their coefficients are NaN while the remaining predictors were solved", PromQLInfo)
+	InvalidWLSHalflifeWarning               = fmt.Errorf("%w: lm_over_time: the \"wls\" flag requires a half-life scalar > 0; fitting without time-decay weights", PromQLWarning)
+	WLSRequiresPivotWarning                 = fmt.Errorf("%w: lm_over_time: the \"wls\" flag applies only with a pivot label; ignored for the bivariate (empty labelName) case", PromQLWarning)
 	SortInRangeQueryWarning                 = fmt.Errorf("%w: sort is ineffective for range queries since results are always ordered by labels", PromQLWarning)
 
 	PossibleNonCounterInfo                  = fmt.Errorf("%w: metric might not be a counter, name does not end in _total/_sum/_count/_bucket:", PromQLInfo)
@@ -394,6 +396,25 @@ func NewDroppedLMPredictorsInfo(predictors string, pos posrange.PositionRange) e
 	return &annoErr{
 		PositionRange: pos,
 		Err:           fmt.Errorf("%w: %s", DroppedLMPredictorsInfo, predictors),
+	}
+}
+
+// NewInvalidWLSHalflifeWarning is used when the lm_over_time "wls" flag is set
+// but the half-life scalar is missing or not > 0.
+func NewInvalidWLSHalflifeWarning(halflife float64, pos posrange.PositionRange) error {
+	return &annoErr{
+		PositionRange: pos,
+		Err:           fmt.Errorf("%w: got %g", InvalidWLSHalflifeWarning, halflife),
+	}
+}
+
+// NewWLSRequiresPivotWarning is used when the lm_over_time "wls" flag is set on
+// the bivariate (empty labelName) path, where time-decay weighting is not
+// applied.
+func NewWLSRequiresPivotWarning(pos posrange.PositionRange) error {
+	return &annoErr{
+		PositionRange: pos,
+		Err:           WLSRequiresPivotWarning,
 	}
 }
 

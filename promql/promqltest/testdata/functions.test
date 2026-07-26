@@ -3343,6 +3343,43 @@ eval instant at 5m lm_over_time("lm,diff", lmd_uni_y{job="test"}[5m], lmd_uni_x{
 
 clear
 
+# The ",wls" flag applies exponential time-decay weights (recent samples count
+# more), with the half-life as the last scalar (seconds). On an exact linear fit
+# residuals are zero, so any weighting recovers the same coefficients — this
+# checks ,wls integrates cleanly. Args: method, y, X, labelName, lambda, halflife.
+load 1m
+  lmw_y{job="test"}          6 5 13 12 20
+  lmw_x{job="test", p="a"}   1 2  3  4  5
+  lmw_x{job="test", p="b"}   1 0  2  1  3
+
+eval instant at 5m lm_over_time("lm,wls", lmw_y{job="test"}[5m], lmw_x{job="test"}[5m], "p", 0, 120)
+  {job="test", p="a"} 2
+  {job="test", p="b"} 3
+  {job="test", p="(intercept)"} 1
+  {job="test", p="(r2)"} 1
+
+# A non-positive half-life warns and falls back to an unweighted fit.
+eval instant at 5m lm_over_time("lm,wls", lmw_y{job="test"}[5m], lmw_x{job="test"}[5m], "p", 0, 0)
+  expect warn
+  {job="test", p="a"} 2
+  {job="test", p="b"} 3
+  {job="test", p="(intercept)"} 1
+  {job="test", p="(r2)"} 1
+
+clear
+
+# ",wls" on the no-pivot (bivariate) path is not applied; it warns and fits
+# unweighted (slope 0.2).
+load 1m
+  lmwb_y{job="test"} 2 4 6 8 10
+  lmwb_x{job="test"} 10 20 30 40 50
+
+eval instant at 5m lm_over_time("lm,wls", lmwb_y{job="test"}[5m], lmwb_x{job="test"}[5m], "", 0, 60)
+  expect warn
+  {job="test"} 0.2
+
+clear
+
 # Tests for ewma_over_time.
 clear
 load 10s

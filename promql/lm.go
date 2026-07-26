@@ -38,22 +38,31 @@ const (
 	// predictors rather than their levels, removing a shared time trend so the
 	// coefficients and r² reflect co-movement instead of a common drift.
 	lmFlagDiff = "diff"
+	// lmFlagWLS applies exponential time-decay weights (weighted least squares),
+	// so recent samples count more than old ones — a better fit for monitoring,
+	// where the current relationship matters most. It reads an optional half-life
+	// scalar (in seconds) as the last argument.
+	lmFlagWLS = "wls"
 )
 
 // parseLMMethod splits the method argument into its base method ("lm" or
-// "ridge") and optional comma-separated flags. The only recognised flag is
-// "diff". It returns ok=false for an unknown base method or flag.
-func parseLMMethod(s string) (base string, difference, ok bool) {
+// "ridge") and optional comma-separated flags. Recognised flags are "diff"
+// (first-difference the data) and "wls" (exponential time-decay weighting). It
+// returns ok=false for an unknown base method or flag.
+func parseLMMethod(s string) (base string, difference, weighted, ok bool) {
 	parts := strings.Split(s, ",")
 	base = parts[0]
 	for _, f := range parts[1:] {
-		if f == lmFlagDiff {
+		switch f {
+		case lmFlagDiff:
 			difference = true
-			continue
+		case lmFlagWLS:
+			weighted = true
+		default:
+			return base, false, false, false
 		}
-		return base, false, false
 	}
-	return base, difference, base == lmMethodOLS || base == lmMethodRidge
+	return base, difference, weighted, base == lmMethodOLS || base == lmMethodRidge
 }
 
 // firstDifference replaces the design/response with consecutive first
@@ -94,6 +103,34 @@ func firstDifferenceSlice(v []float64) []float64 {
 		d[i-1] = v[i] - v[i-1]
 	}
 	return d
+}
+
+// timeDecayWeightedCopy returns copies of design and resp with each row i scaled
+// by sqrt(wᵢ), where wᵢ = 0.5^(ageᵢ/halflife) decays exponentially with the
+// sample's age measured from the most recent row. times[i] is row i's timestamp
+// (ms, ascending). halflifeMs must be > 0. Scaling the rows by sqrt(wᵢ) turns
+// the ordinary least-squares solve into weighted least squares, so recent
+// samples influence the fit more than old ones. The originals are not mutated.
+func timeDecayWeightedCopy(design [][]float64, resp []float64, times []int64, halflifeMs float64) ([][]float64, []float64) {
+	n := len(design)
+	if n == 0 {
+		return design, resp
+	}
+	maxT := times[n-1] // Ascending order, so the last row is the most recent.
+	wDesign := make([][]float64, n)
+	wResp := make([]float64, n)
+	for i := range design {
+		age := float64(maxT - times[i])
+		// sqrt(0.5^(age/halflife)) = 2^(-age/(2·halflife)).
+		s := math.Exp2(-age / (2 * halflifeMs))
+		row := make([]float64, len(design[i]))
+		for j := range design[i] {
+			row[j] = design[i][j] * s
+		}
+		wDesign[i] = row
+		wResp[i] = resp[i] * s
+	}
+	return wDesign, wResp
 }
 
 // lmInterceptLabelValue is the reserved value placed on the pivot label of the
@@ -425,7 +462,7 @@ func (ev *evaluator) evalLMOverTime(ctx context.Context, e *parser.Call) (parser
 	var warnings annotations.Annotations
 
 	methodArg := stringFromArg(e.Args[0])
-	method, difference, ok := parseLMMethod(methodArg)
+	method, difference, weighted, ok := parseLMMethod(methodArg)
 	if !ok {
 		warnings.Add(annotations.NewInvalidLMMethodWarning(methodArg, e.Args[0].PositionRange()))
 		return Matrix{}, warnings
@@ -443,6 +480,23 @@ func (ev *evaluator) evalLMOverTime(ctx context.Context, e *parser.Call) (parser
 		if !ok {
 			ev.error(errWithWarnings{
 				fmt.Errorf("lm_over_time: expected scalar lambda argument, got %T", val),
+				warnings,
+			})
+		}
+	}
+
+	// Optional half-life scalar (seconds) for the ,wls exponential time-decay
+	// weights, evaluated per step like lambda.
+	var halflifeMat Matrix
+	halflifeHasArg := len(e.Args) > 5
+	if halflifeHasArg {
+		val, ws := ev.eval(ctx, e.Args[5])
+		warnings.Merge(ws)
+		var ok bool
+		halflifeMat, ok = val.(Matrix)
+		if !ok {
+			ev.error(errWithWarnings{
+				fmt.Errorf("lm_over_time: expected scalar half-life argument, got %T", val),
 				warnings,
 			})
 		}
@@ -493,6 +547,12 @@ func (ev *evaluator) evalLMOverTime(ctx context.Context, e *parser.Call) (parser
 		}
 		return 0
 	}
+	halflifeAt := func(step int) float64 {
+		if halflifeHasArg && len(halflifeMat) > 0 && len(halflifeMat[0].Floats) > step {
+			return halflifeMat[0].Floats[step].F
+		}
+		return 0
+	}
 
 	// Build the response lookup keyed by the grouping signature (all labels
 	// except __name__ and, defensively, labelName).
@@ -523,6 +583,11 @@ func (ev *evaluator) evalLMOverTime(ctx context.Context, e *parser.Call) (parser
 	}
 
 	if labelName == "" {
+		if weighted {
+			// Time-decay weighting is only wired into the pivot (multiple-
+			// regression) path for now; warn rather than silently ignore.
+			warnings.Add(annotations.NewWLSRequiresPivotWarning(e.Args[0].PositionRange()))
+		}
 		return ev.lmBivariate(ctx, e, selX, selY, vsX, vsY, respBySig, difference,
 			rangeX, rangeY, offsetX, offsetY, numSteps, &warnings)
 	}
@@ -623,6 +688,7 @@ func (ev *evaluator) evalLMOverTime(ctx context.Context, e *parser.Call) (parser
 		predHists := make([][]HPoint, k)
 		rankDeficientSeen := false
 		droppedSeen := false
+		invalidHalflifeSeen := false
 
 		step := -1
 		for ts := ev.startTimestamp; ts <= ev.endTimestamp; ts += ev.interval {
@@ -680,8 +746,28 @@ func (ev *evaluator) evalLMOverTime(ctx context.Context, e *parser.Call) (parser
 				design = append(design, row)
 				resp = append(resp, ra.y)
 			}
+			// usedTimes tracks the timestamp of each design row (for ,wls
+			// weighting). First-differencing pairs consecutive rows, so a diff
+			// row inherits the later timestamp of its pair.
+			usedTimes := rowTimes
 			if difference {
 				design, resp = firstDifference(design, resp)
+				if len(rowTimes) > 0 {
+					usedTimes = rowTimes[1:]
+				}
+			}
+
+			// solveDesign/solveResp feed the solver; for ,wls they are time-decay
+			// weighted copies, leaving design/resp (unweighted) for an honest r².
+			solveDesign, solveResp := design, resp
+			if weighted {
+				halflifeSec := halflifeAt(step)
+				if halflifeSec > 0 {
+					solveDesign, solveResp = timeDecayWeightedCopy(design, resp, usedTimes, halflifeSec*1000)
+				} else if !invalidHalflifeSeen {
+					invalidHalflifeSeen = true
+					warnings.Add(annotations.NewInvalidWLSHalflifeWarning(halflifeSec, e.Args[0].PositionRange()))
+				}
 			}
 
 			coeffs := make([]float64, k+1)
@@ -693,7 +779,7 @@ func (ev *evaluator) evalLMOverTime(ctx context.Context, e *parser.Call) (parser
 			case useRidge && lambda > 0:
 				// Ridge is full rank by construction (λI), so the strict solver
 				// suffices — no column can be rank deficient.
-				if sol, ok := householderLeastSquares(ridgeAugment(design, resp, lambda)); ok {
+				if sol, ok := householderLeastSquares(ridgeAugment(solveDesign, solveResp, lambda)); ok {
 					copy(coeffs, sol)
 				} else {
 					solvable = false
@@ -702,7 +788,7 @@ func (ev *evaluator) evalLMOverTime(ctx context.Context, e *parser.Call) (parser
 				// OLS (and ridge with an invalid λ): rank-revealing solve that
 				// drops only the degenerate columns and solves the rest, so one
 				// constant or collinear predictor no longer NaNs the whole model.
-				if sol, _, ok := householderLeastSquaresPivoted(design, resp); ok {
+				if sol, _, ok := householderLeastSquaresPivoted(solveDesign, solveResp); ok {
 					copy(coeffs, sol)
 					for j := range sol {
 						if math.IsNaN(sol[j]) {

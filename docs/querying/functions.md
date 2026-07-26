@@ -742,7 +742,7 @@ label_replace(up{job="api-server",service="a:c"}, "foo", "$name", "service", "(?
 flag](../feature_flags.md#experimental-promql-functions)
 `--enable-feature=promql-experimental-functions`.**
 
-`lm_over_time(method string, y range-vector, X range-vector, labelName string, lambda=0 scalar)`
+`lm_over_time(method string, y range-vector, X range-vector, labelName string, lambda=0 scalar, halflife=0 scalar)`
 fits a multiple linear regression of the response series `y` on the predictor
 series `X` at each evaluation step, and returns the fitted coefficients. It is
 the multivariate generalization of
@@ -757,12 +757,22 @@ label.
 | `"lm"`    | ordinary least squares                                               |
 | `"ridge"` | L2-penalized least squares; requires `lambda > 0` (intercept unpenalized) |
 
-The base method may be followed by the comma-separated flag `,diff` (for
-example `"ridge,diff"`) to fit on the **first differences** (Δ-on-Δ) of `y` and
-`X` instead of their levels. Differencing removes a shared time trend, so the
-coefficients and `(r2)` reflect step-to-step co-movement rather than a common
-drift — use it when both series trend together and a levels fit would report a
-spuriously strong relationship.
+The base method may be followed by one or more comma-separated flags, which
+compose (for example `"ridge,diff,wls"`):
+
+* `,diff` — fit on the **first differences** (Δ-on-Δ) of `y` and `X` instead of
+  their levels. Differencing removes a shared time trend, so the coefficients
+  and `(r2)` reflect step-to-step co-movement rather than a common drift — use
+  it when both series trend together and a levels fit would report a spuriously
+  strong relationship.
+* `,wls` — **weighted least squares** with exponential time-decay weights, so
+  recent samples influence the fit more than old ones (a better fit for
+  monitoring, where the current relationship matters most). The decay `halflife`
+  is given as the last scalar argument, in seconds; a sample of age `t` gets
+  weight `0.5^(t/halflife)`. The half-life must be `> 0`, otherwise the fit
+  falls back to unweighted with a warning. `,wls` currently applies only when a
+  `labelName` pivot is given (not the bivariate case). The reported `(r2)` is
+  measured against the unweighted observations.
 
 Predictor series are grouped by all labels except `__name__` and `labelName`;
 each group is one independent regression, and its distinct `labelName` values

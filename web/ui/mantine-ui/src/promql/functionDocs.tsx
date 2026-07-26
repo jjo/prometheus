@@ -2168,7 +2168,10 @@ const funcDocs: Record<string, React.ReactNode> = {
       </p>
 
       <p>
-        <code>lm_over_time(method string, y range-vector, X range-vector, labelName string, lambda=0 scalar)</code>
+        <code>
+          lm_over_time(method string, y range-vector, X range-vector, labelName string, lambda=0 scalar, halflife=0
+          scalar)
+        </code>
         fits a multiple linear regression of the response series <code>y</code> on the predictor series <code>X</code>{" "}
         at each evaluation step, and returns the fitted coefficients. It is the multivariate generalization of
         <a href="#regression_over_time">
@@ -2211,6 +2214,30 @@ const funcDocs: Record<string, React.ReactNode> = {
         </tbody>
       </table>
       <p>
+        The base method may be followed by one or more comma-separated flags, which compose (for example{" "}
+        <code>&quot;ridge,diff,wls&quot;</code>):
+      </p>
+
+      <ul>
+        <li>
+          <code>,diff</code> — fit on the <strong>first differences</strong> (Δ-on-Δ) of <code>y</code> and{" "}
+          <code>X</code> instead of their levels. Differencing removes a shared time trend, so the coefficients and{" "}
+          <code>(r2)</code> reflect step-to-step co-movement rather than a common drift — use it when both series trend
+          together and a levels fit would report a spuriously strong relationship.
+        </li>
+        <li>
+          <code>,wls</code> — <strong>weighted least squares</strong> with exponential time-decay weights, so recent
+          samples influence the fit more than old ones (a better fit for monitoring, where the current relationship
+          matters most). The decay <code>halflife</code>
+          is given as the last scalar argument, in seconds; a sample of age <code>t</code> gets weight{" "}
+          <code>0.5^(t/halflife)</code>. The half-life must be <code>&gt; 0</code>, otherwise the fit falls back to
+          unweighted with a warning. <code>,wls</code> currently applies only when a<code>labelName</code> pivot is
+          given (not the bivariate case). The reported <code>(r2)</code> is measured against the unweighted
+          observations.
+        </li>
+      </ul>
+
+      <p>
         Predictor series are grouped by all labels except <code>__name__</code> and <code>labelName</code>; each group
         is one independent regression, and its distinct <code>labelName</code> values become the design-matrix columns.
         The response series is matched to a group by those same grouping labels. Each emitted series carries the
@@ -2230,12 +2257,16 @@ const funcDocs: Record<string, React.ReactNode> = {
       </p>
 
       <p>
-        The fit is solved with a Householder QR decomposition, which is numerically stable for the near-collinear
-        predictors common in metrics (for example CPU modes). A step returns <code>NaN</code> coefficients when the
-        design is rank deficient — collinear predictors, or fewer samples than columns — and a PromQL info annotation is
-        emitted. Groups whose predictor cardinality exceeds the supported maximum, or that contain a predictor whose
-        pivot value collides with
-        <code>(intercept)</code>, are skipped with a warning. Histogram samples are ignored.
+        The <code>&quot;lm&quot;</code> fit is solved with a <strong>rank-revealing</strong> column-pivoted Householder
+        QR decomposition, which is numerically stable for the near-collinear predictors common in metrics (for example
+        CPU modes). When the design is rank deficient — a collinear or near-constant predictor, such as a request verb
+        sitting at 0 req/s — the solver drops only the offending column (its coefficient is <code>NaN</code>) and still
+        solves for the remaining predictors, emitting a PromQL info annotation that names what was dropped. This means
+        one degenerate predictor no longer turns the whole model into <code>NaN</code>; the good predictors keep their
+        coefficients. A step returns all-<code>NaN</code> coefficients only when there are fewer samples than columns.
+        (The <code>&quot;ridge&quot;</code> method is full rank by construction and always solves every column.) Groups
+        whose predictor cardinality exceeds the supported maximum, or that contain a predictor whose pivot value
+        collides with <code>(intercept)</code>, are skipped with a warning. Histogram samples are ignored.
       </p>
 
       <p>For example, to estimate how much each non-idle CPU mode contributes to request latency over the past hour:</p>

@@ -303,7 +303,7 @@ var Functions = map[string]*Function{
 	"lm_over_time": {
 		Name:         "lm_over_time",
 		ArgTypes:     []ValueType{ValueTypeString, ValueTypeMatrix, ValueTypeMatrix, ValueTypeString, ValueTypeScalar},
-		Variadic:     1,
+		Variadic:     2,
 		ReturnType:   ValueTypeVector,
 		Experimental: true,
 	},
