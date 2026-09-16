@@ -106,7 +106,11 @@ import {
   TimeseriesGen,
   Timestamp,
   Vector,
+  RobustZscore,
+  RobustZscoreOverTime,
   Year,
+  Zscore,
+  ZscoreOverTime,
 } from '@prometheus-io/lezer-promql';
 
 export enum ValueType {
@@ -695,6 +699,30 @@ const promqlFunctions: { [key: number]: PromQLFunction } = {
     name: 'year',
     argTypes: [ValueType.vector],
     variadic: 1,
+    returnType: ValueType.vector,
+  },
+  [Zscore]: {
+    name: 'zscore',
+    argTypes: [ValueType.vector],
+    variadic: 0,
+    returnType: ValueType.vector,
+  },
+  [ZscoreOverTime]: {
+    name: 'zscore_over_time',
+    argTypes: [ValueType.matrix],
+    variadic: 0,
+    returnType: ValueType.vector,
+  },
+  [RobustZscore]: {
+    name: 'robust_zscore',
+    argTypes: [ValueType.vector],
+    variadic: 0,
+    returnType: ValueType.vector,
+  },
+  [RobustZscoreOverTime]: {
+    name: 'robust_zscore_over_time',
+    argTypes: [ValueType.matrix],
+    variadic: 0,
     returnType: ValueType.vector,
   },
 };
