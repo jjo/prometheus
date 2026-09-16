@@ -116,6 +116,72 @@ Special cases:
 * Float samples are unchanged if `min` is `-Inf`
 * All float samples are set to `+Inf` if `min` is `+Inf`
 
+## `correlation_over_time()`
+
+**This function has to be enabled via the [feature
+flag](../feature_flags.md#experimental-promql-functions)
+`--enable-feature=promql-experimental-functions`.**
+
+`correlation_over_time(a range-vector, b range-vector, method="pearson" string, on="" string)`
+returns the correlation coefficient between paired float samples of `a` and
+`b` over the given range, per matched series pair. Series across the two
+selectors are paired by exact match on all labels except `__name__` by
+default, or by exactly the `on` labels (comma-separated) when given — letting
+series with differing extra labels (different metrics, different label
+schemas) still pair, as long as they agree on the `on` labels. Unpaired
+series are silently dropped. At each evaluation step, only samples whose
+timestamps appear in both range windows are correlated.
+
+The optional `method` string selects the coefficient:
+
+| `method`     | meaning                               |
+|--------------|---------------------------------------|
+| `"pearson"`  | Pearson product-moment (the default)  |
+| `"spearman"` | Spearman rank, with average-rank ties |
+| `"kendall"`  | Kendall tau-b                         |
+
+An empty `method` behaves like omitting the argument. An unknown method name
+yields an empty result plus a PromQL warning annotation.
+
+Pearson and Spearman are computed in a single Kahan-compensated pass.
+Kendall is the naive O(n²) implementation, which is acceptable for the range
+sizes typical of Prometheus queries but can be expensive for very long
+windows.
+
+Returns `NaN` for a step when the paired window has fewer than 2 samples or
+the variance is zero (constant input, single distinct value, or all-tied
+pairs for Kendall). Histogram samples are skipped and do not contribute to
+the correlation.
+
+Multiple series in `a` matching the same series in `b` is normal fan-out, not
+ambiguity. But when more than one series in `b` matches the same signature,
+the pairing is ambiguous — the whole pair is skipped (not picked arbitrarily)
+and a PromQL warning annotation is emitted once.
+
+For example, to surface request-error-rate and request-latency series whose
+per-minute behaviour over the past hour moves together (potentially the
+same upstream problem causing both):
+
+```
+correlation_over_time(
+  rate(http_request_errors_total[1m])[1h:1m],
+  histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[1m]))[1h:1m]
+) > 0.8
+```
+
+`on` lets the two sides carry different extra labels — for example, errors
+labeled by `code` and latency labeled by `quantile`, correlated per
+`job`/`instance` regardless. Since `on` is positional, `method` has to be
+given too (`""` or `"pearson"` for the default):
+
+```
+correlation_over_time(
+  rate(http_request_errors_total[1m])[1h:1m],
+  rate(http_request_duration_seconds_sum[1m])[1h:1m],
+  "pearson", "job,instance"
+) > 0.8
+```
+
 ## `day_of_month()`
 
 `day_of_month(v=vector(time()) instant-vector)` interprets float samples in
@@ -711,6 +777,112 @@ This second example has the same effect than the first example, and illustrates 
 label_replace(up{job="api-server",service="a:c"}, "foo", "$name", "service", "(?P<name>.*):(?P<version>.*)")
 ```
 
+## `lm_over_time()`
+
+**This function has to be enabled via the [feature
+flag](../feature_flags.md#experimental-promql-functions)
+`--enable-feature=promql-experimental-functions`.**
+
+`lm_over_time(method string, y range-vector, X range-vector, labelName string, on string, lambda=0 scalar, halflife=0 scalar)`
+fits a multiple linear regression of the response series `y` on the predictor
+series `X` at each evaluation step, and returns the fitted coefficients. It is
+the multivariate generalization of
+[`regression_over_time()`](#regression_over_time): `labelName` is the pivot that
+reshapes `X` into a design matrix whose columns are the distinct values of that
+label. `on` must be given (pass `""` for "no restriction") whenever `lambda` or
+`halflife` are supplied, mirroring `labelName`'s own required-but-defaultable
+convention.
+
+`method` selects the estimator:
+
+| `method`  | meaning                                                              |
+|-----------|----------------------------------------------------------------------|
+| `"lm"`    | ordinary least squares                                               |
+| `"ridge"` | L2-penalized least squares; requires `lambda > 0` (intercept unpenalized) |
+
+The base method may be followed by one or more comma-separated flags, which
+compose (for example `"ridge,diff,wls"`):
+
+* `,diff` — fit on the **first differences** (Δ-on-Δ) of `y` and `X` instead of
+  their levels. Differencing removes a shared time trend, so the coefficients
+  and `(r2)` reflect step-to-step co-movement rather than a common drift — use
+  it when both series trend together and a levels fit would report a spuriously
+  strong relationship.
+* `,wls` — **weighted least squares** with exponential time-decay weights, so
+  recent samples influence the fit more than old ones (a better fit for
+  monitoring, where the current relationship matters most). The decay `halflife`
+  is given as the last scalar argument, in seconds; a sample of age `t` gets
+  weight `0.5^(t/halflife)`. The half-life must be `> 0`, otherwise the fit
+  falls back to unweighted with a warning. `,wls` currently applies only when a
+  `labelName` pivot is given (not the bivariate case). The reported `(r2)` is
+  measured against the unweighted observations.
+
+Predictor series are grouped by all labels except `__name__` and `labelName`
+by default, or by exactly the `on` labels (comma-separated) when non-empty —
+letting `y` and `X` carry differing extra labels and still group together, as
+long as they agree on the `on` labels. Each group is one independent
+regression, and its distinct `labelName` values become the design-matrix
+columns. The response series is matched to a group by those same grouping
+labels. Each emitted series carries the group's labels (from `X`) with
+`labelName` set to the predictor's value — or to the reserved value
+`(intercept)` for the intercept term — and its value is the fitted coefficient.
+Each group also emits a `(r2)` series carrying the coefficient of determination
+(the fraction of the response variance explained), so a meaningful fit can be
+told apart from a spurious one that the coefficients alone would hide; it is
+`NaN` when the fit is undefined.
+
+Two ambiguity cases are skipped (with a warning) rather than resolved
+arbitrarily: more than one response series matching the same group, and two
+predictor series in the same group ending up with the same `labelName` pivot
+value (which would otherwise produce two design-matrix columns with the same
+header) — the latter typically happens once `on` drops the label that used to
+distinguish them.
+
+When `labelName` is empty, the function degenerates to the bivariate case and
+returns the regression slope per matched pair, matching `regression_over_time`
+with its default (slope) output.
+
+The `"lm"` fit is solved with a **rank-revealing** column-pivoted Householder QR
+decomposition, which is numerically stable for the near-collinear predictors
+common in metrics (for example CPU modes). When the design is rank deficient —
+a collinear or near-constant predictor, such as a request verb sitting at 0
+req/s — the solver drops only the offending column (its coefficient is `NaN`)
+and still solves for the remaining predictors, emitting a PromQL info annotation
+that names what was dropped. This means one degenerate predictor no longer turns
+the whole model into `NaN`; the good predictors keep their coefficients. A step
+returns all-`NaN` coefficients only when there are fewer samples than columns.
+(The `"ridge"` method is full rank by construction and always solves every
+column.) Groups whose predictor cardinality exceeds the supported maximum, or
+that contain a predictor whose pivot value collides with `(intercept)`, are
+skipped with a warning. Histogram samples are ignored.
+
+For example, to estimate how much each non-idle CPU mode contributes to request
+latency over the past hour:
+
+```
+lm_over_time(
+  "lm",
+  request_latency_p99[1h:1m],
+  rate(node_cpu_seconds_total{mode!="idle"}[1m])[1h:1m],
+  "mode",
+  ""
+)
+```
+
+`on` lets `y` and `X` carry differing extra labels — for example, a `y`
+recording rule that adds a `team` label the exporter's CPU metrics don't
+have, grouped by `instance` regardless:
+
+```
+lm_over_time(
+  "lm",
+  request_latency_p99[1h:1m],
+  rate(node_cpu_seconds_total{mode!="idle"}[1m])[1h:1m],
+  "mode",
+  "instance"
+)
+```
+
 ## `max_of()`
 
 **This function has to be enabled via the [feature
@@ -819,6 +991,64 @@ Note that when combining `rate()` with an aggregation operator (e.g. `sum()`)
 or a function aggregating over time (any function ending in `_over_time`),
 always take a `rate()` first, then aggregate. Otherwise `rate()` cannot detect
 counter resets when your target restarts.
+
+## `regression_over_time()`
+
+**This function has to be enabled via the [feature
+flag](../feature_flags.md#experimental-promql-functions)
+`--enable-feature=promql-experimental-functions`.**
+
+`regression_over_time(y range-vector, x range-vector, output=0 scalar, link=0 scalar)`
+fits a least-squares regression of the dependent series `y` on the independent
+series `x` over the given range, per matched series pair, and returns the
+selected scalar. Series across the two selectors are paired by exact match on
+all labels except `__name__`; unpaired series are silently dropped. At each
+evaluation step, only samples whose timestamps appear in both range windows are
+used.
+
+This generalises [`correlation_over_time()`](#correlation_over_time): where
+correlation returns the unitless association coefficient `r`, regression returns
+the predictive line itself (`slope = r · σy/σx`) and, optionally, a forecast.
+It is the closed-form, Gaussian-family special case of a count time-series GLM
+(see the [`tscount` package](https://cran.r-project.org/package=tscount)); the
+iterative maximum-likelihood fit of the full GLM is intentionally not
+implemented.
+
+The optional `output` scalar selects what is returned:
+
+| `output` | meaning                                                  |
+|----------|----------------------------------------------------------|
+| `0`      | slope `β₁` (default)                                     |
+| `1`      | intercept `β₀`                                           |
+| `2`      | prediction `ŷ` at the most recent `x` in the window     |
+| `3`      | coefficient of determination `r²`                       |
+
+The optional `link` scalar selects the link function:
+
+| `link` | meaning                                                              |
+|--------|----------------------------------------------------------------------|
+| `0`    | identity (default): fits `y ≈ β₀ + β₁·x`                             |
+| `1`    | log: fits `ln(y) ≈ β₀ + β₁·x`, i.e. `y ≈ exp(β₀)·exp(β₁·x)`          |
+
+The log link suits non-negative, count-like series. Its slope, intercept and
+`r²` are reported on the natural-log scale, while the prediction is
+back-transformed with `exp`. Samples with non-positive `y` cannot be
+log-transformed and are dropped, with a PromQL info annotation.
+
+Returns `NaN` for a step when the paired window has fewer than 2 samples, when
+`x` has zero variance, or when `output`/`link` is out of range — in the last
+case a PromQL warning annotation is also emitted. Histogram samples are skipped
+and do not contribute.
+
+For example, to estimate how much CPU each unit of request rate costs, fitted
+over the past hour:
+
+```
+regression_over_time(
+  rate(process_cpu_seconds_total[1m])[1h:1m],
+  rate(http_requests_total[1m])[1h:1m]
+)
+```
 
 ## `resets()`
 

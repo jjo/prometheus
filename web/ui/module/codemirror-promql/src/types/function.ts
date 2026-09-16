@@ -27,6 +27,7 @@ import {
   Clamp,
   ClampMax,
   ClampMin,
+  CorrelationOverTime,
   Cos,
   Cosh,
   CountOverTime,
@@ -58,6 +59,7 @@ import {
   LabelJoin,
   LabelReplace,
   LastOverTime,
+  LmOverTime,
   Ln,
   Log10,
   Log2,
@@ -77,6 +79,7 @@ import {
   Rad,
   Range,
   Rate,
+  RegressionOverTime,
   Resets,
   Round,
   Scalar,
@@ -208,6 +211,12 @@ const promqlFunctions: { [key: number]: PromQLFunction } = {
     name: 'clamp_min',
     argTypes: [ValueType.vector, ValueType.scalar],
     variadic: 0,
+    returnType: ValueType.vector,
+  },
+  [CorrelationOverTime]: {
+    name: 'correlation_over_time',
+    argTypes: [ValueType.matrix, ValueType.matrix, ValueType.scalar],
+    variadic: 1,
     returnType: ValueType.vector,
   },
   [Cos]: {
@@ -396,6 +405,12 @@ const promqlFunctions: { [key: number]: PromQLFunction } = {
     variadic: 0,
     returnType: ValueType.vector,
   },
+  [LmOverTime]: {
+    name: 'lm_over_time',
+    argTypes: [ValueType.string, ValueType.matrix, ValueType.matrix, ValueType.string, ValueType.scalar],
+    variadic: 1,
+    returnType: ValueType.vector,
+  },
   [Ln]: {
     name: 'ln',
     argTypes: [ValueType.vector],
@@ -508,6 +523,12 @@ const promqlFunctions: { [key: number]: PromQLFunction } = {
     name: 'rate',
     argTypes: [ValueType.matrix],
     variadic: 0,
+    returnType: ValueType.vector,
+  },
+  [RegressionOverTime]: {
+    name: 'regression_over_time',
+    argTypes: [ValueType.matrix, ValueType.matrix, ValueType.scalar],
+    variadic: 2,
     returnType: ValueType.vector,
   },
   [Resets]: {
