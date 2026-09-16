@@ -103,6 +103,7 @@ import {
   Tanh,
   Time,
   TimeToThreshold,
+  TimeseriesGen,
   Timestamp,
   Vector,
   Year,
@@ -670,6 +671,12 @@ const promqlFunctions: { [key: number]: PromQLFunction } = {
     name: 'time_to_threshold',
     argTypes: [ValueType.matrix, ValueType.scalar],
     variadic: 0,
+    returnType: ValueType.vector,
+  },
+  [TimeseriesGen]: {
+    name: 'timeseries_gen',
+    argTypes: [ValueType.string, ValueType.string],
+    variadic: 1,
     returnType: ValueType.vector,
   },
   [Timestamp]: {

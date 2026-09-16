@@ -2989,6 +2989,7 @@ var FunctionCalls = map[string]FunctionCall{
 	"tan":                          funcTan,
 	"tanh":                         funcTanh,
 	"time_to_threshold":            funcTimeToThreshold,
+	"timeseries_gen":               funcTimeseriesGen,
 	"time":                         funcTime,
 	"timestamp":                    funcTimestamp,
 	"vector":                       funcVector,
