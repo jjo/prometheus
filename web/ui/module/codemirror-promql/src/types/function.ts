@@ -102,6 +102,7 @@ import {
   Tan,
   Tanh,
   Time,
+  TimeToThreshold,
   Timestamp,
   Vector,
   Year,
@@ -664,6 +665,12 @@ const promqlFunctions: { [key: number]: PromQLFunction } = {
     argTypes: [],
     variadic: 0,
     returnType: ValueType.scalar,
+  },
+  [TimeToThreshold]: {
+    name: 'time_to_threshold',
+    argTypes: [ValueType.matrix, ValueType.scalar],
+    variadic: 0,
+    returnType: ValueType.vector,
   },
   [Timestamp]: {
     name: 'timestamp',
